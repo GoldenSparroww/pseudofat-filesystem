@@ -25,3 +25,4 @@ rustc-ice-*.txt
 
 # Manually added
 tmp
+dist

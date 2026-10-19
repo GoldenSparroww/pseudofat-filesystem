@@ -1,0 +1,28 @@
+# Maximum width of a line (modern standards favor 100 or 120 over the default 100)
+max_width = 120
+
+# Style for imports/use statements
+imports_granularity = "Crate"       # Groups imports by crate (e.g., use std::io::{self, Read};)
+group_imports = "StdExternalCrate"  # Orders imports: std -> external crates -> local modules
+
+# Format comments and code examples in doc comments
+format_code_in_doc_comments = true
+format_strings = true
+wrap_comments = true
+comment_width = 100                 # Keeps prose comments comfortably readable on wide displays
+
+# Struct & Function formatting
+fn_single_line = false              # Keeps functions structured vertically unless extremely simple
+where_single_line = false           # Places where-clauses on new lines for better readability
+
+# Combinators & Chaining
+chain_width = 80                    # Allows longer method chains before breaking into multiple lines
+
+# Re-ordering
+reorder_imports = true
+reorder_modules = true
+reorder_impl_items = true
+
+# Misc trailing commas
+use_small_heuristics = "Default"
+trailing_comma = "Vertical"         # Always add trailing commas in multiline structs/enums/tuples

@@ -4,3 +4,9 @@ version = "0.0.0"
 edition = "2024"
 
 [dependencies]
+
+# Závislosti jen pro testy – do výsledné binárky se nedostanou.
+[dev-dependencies]
+# Bez výchozích features: async-timeout (asynchronní testy) ani crate-name
+# (přejmenovaný crate) nepotřebujeme a ušetříme tím několik závislostí.
+rstest = { version = "=0.28.0", default-features = false }
