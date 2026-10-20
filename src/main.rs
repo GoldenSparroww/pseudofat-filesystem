@@ -23,7 +23,7 @@ fn main() -> ExitCode {
     // args_os místo args: cesta na hostiteli nemusí být platné UTF-8
     // a args() by na takové cestě spadl.
     let args: Vec<OsString> = env::args_os().collect();
-    
+
     // Očekáváme přesně jeden parametr – soubor se souborovým systémem.
     let [_, fs_path] = args.as_slice() else {
         eprintln!("Usage: pseudofat <fs-file>");

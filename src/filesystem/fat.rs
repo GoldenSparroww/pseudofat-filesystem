@@ -187,7 +187,7 @@ impl FAT {
     }
 
     /// Zapíše na disk položky `first..=last`. Pokud sleže, v RAM stav je, na disku ne; odhalí jen check.
-    /// Abstrahuje offset FAT 
+    /// Abstrahuje offset FAT
     fn save_range(&self, disk: &mut Disk, first: usize, last: usize) -> io::Result<()> {
         let bytes: Vec<u8> = self.entries[first..=last].iter().flat_map(|raw| raw.to_le_bytes()).collect();
 

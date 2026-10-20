@@ -12,55 +12,23 @@ use crate::filesystem::FileSystem;
 /// Syntakticky správný příkaz včetně parametrů
 #[derive(Debug)]
 pub enum Command {
-    Cp {
-        src: String,
-        dst: String,
-    },
-    Mv {
-        src: String,
-        dst: String,
-    },
-    Rm {
-        path: String,
-    },
-    Mkdir {
-        path: String,
-    },
-    Rmdir {
-        path: String,
-    },
-    Ls {
-        path: Option<String>,
-    },
-    Cat {
-        path: String,
-    },
-    Cd {
-        path: String,
-    },
+    Cp { src: String, dst: String },
+    Mv { src: String, dst: String },
+    Rm { path: String },
+    Mkdir { path: String },
+    Rmdir { path: String },
+    Ls { path: Option<String> },
+    Cat { path: String },
+    Cd { path: String },
     Pwd,
-    Info {
-        path: String,
-    },
-    Incp {
-        host_src: String,
-        dst: String,
-    },
-    Outcp {
-        src: String,
-        host_dst: String,
-    },
-    Load {
-        host_path: String,
-    },
-    Format {
-        size_bytes: u64,
-    },
+    Info { path: String },
+    Incp { host_src: String, dst: String },
+    Outcp { src: String, host_dst: String },
+    Load { host_path: String },
+    Format { size_bytes: u64 },
     Exit,
     Check,
-    Bug {
-        path: String,
-    },
+    Bug { path: String },
 }
 
 /// Syntaxe všech příkazů
