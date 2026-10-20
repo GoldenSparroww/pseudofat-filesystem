@@ -2,6 +2,7 @@
 
 use std::fmt;
 use std::io::{self, BufRead, IsTerminal, Write};
+use std::num::IntErrorKind;
 use std::path::PathBuf;
 
 use crate::config::FORMAT_UNIT;
@@ -171,13 +172,15 @@ fn parse_size(text: &str) -> Result<u64, ParseError> {
     let upper = text.to_ascii_uppercase();
     let number = upper.strip_suffix("MB").unwrap_or(&upper);
 
-    number
-        .parse::<u64>()
-        .ok()
-        // checked_mul vrátí None při přetečení (např. format 99999999999999MB)
-        // TODO, omezit lépe
-        .and_then(|n| n.checked_mul(FORMAT_UNIT))
-        .ok_or_else(|| ParseError::InvalidSize(text.to_string()))
+    let units = match number.parse::<u64>() {
+        Ok(n) => n,
+        // Syntakticky správné číslo, jen se nevejde do u64 (víc než 20 číslic)
+        Err(e) if *e.kind() == IntErrorKind::PosOverflow => u64::MAX,
+        Err(_) => return Err(ParseError::InvalidSize(text.to_string())),
+    };
+
+    // saturating_mul: při přetečení vrátí u64::MAX místo panic/přetečení
+    Ok(units.saturating_mul(FORMAT_UNIT))
 }
 
 /// Co má shell udělat po vykonání příkazu

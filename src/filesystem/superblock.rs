@@ -3,7 +3,7 @@
 use std::fmt;
 
 use super::fat;
-use crate::config::CLUSTER_SIZE;
+use crate::config::{CLUSTER_SIZE, FORMAT_UNIT, MAX_DISK_SIZE};
 use crate::error::FsError;
 
 /// Velikost oblasti vyhrazené pro superblok
@@ -20,6 +20,12 @@ const MIN_CLUSTER_SIZE: u32 = 512;
 
 // Kontrola konfigurace už při překladu: s příliš malým clusterem se program nepřeloží
 const _: () = assert!(CLUSTER_SIZE >= MIN_CLUSTER_SIZE, "CLUSTER_SIZE must be at least 512 B");
+
+// I největší disk s nejmenším clusterem musí jít adresovat čísly clusterů typu u32
+const _: () = assert!(
+    MAX_DISK_SIZE / (MIN_CLUSTER_SIZE as u64 + fat::FAT_INDEX_SIZE) <= fat::MAX_CLUSTER_COUNT as u64,
+    "MAX_DISK_SIZE is too large for u32 cluster numbers"
+);
 
 // Pozice polí
 const AT_MAGIC: usize = 0;
@@ -55,6 +61,13 @@ impl Superblock {
             return Err(format!(
                 "Cluster size too small (minimum allowed: {} B).",
                 MIN_CLUSTER_SIZE
+            ));
+        }
+
+        if disk_size > MAX_DISK_SIZE {
+            return Err(format!(
+                "Disk too large (maximum allowed: {} MB).",
+                MAX_DISK_SIZE / FORMAT_UNIT
             ));
         }
 
@@ -95,8 +108,7 @@ impl Superblock {
 
     /// Vrátí jen superblok, který popisuje platný FS
     pub fn from_bytes(bytes: &[u8; SUPERBLOCK_SIZE], disk_size: u64) -> Result<Superblock, FsError> {
-        // TODO, lépe? vlstní metoda/funkce?
-        if bytes[AT_MAGIC..AT_MAGIC + MAGIC.len()] != MAGIC {
+        if get_bytes(bytes, AT_MAGIC) != MAGIC {
             return Err(FsError::NotFormatted);
         }
 
@@ -136,8 +148,7 @@ impl Superblock {
     pub fn to_bytes(&self) -> [u8; SUPERBLOCK_SIZE] {
         let mut bytes = [0u8; SUPERBLOCK_SIZE];
 
-        // TODO, lépe? vlstní metoda/funkce?
-        bytes[AT_MAGIC..AT_MAGIC + MAGIC.len()].copy_from_slice(&MAGIC);
+        put_bytes(&mut bytes, AT_MAGIC, &MAGIC);
         put_u32(&mut bytes, AT_VERSION, VERSION);
         put_u32(&mut bytes, AT_CLUSTER_SIZE, self.cluster_size);
         put_u32(&mut bytes, AT_CLUSTER_COUNT, self.cluster_count);
@@ -165,26 +176,34 @@ fn corrupted(detail: impl ToString) -> FsError {
     FsError::Corrupted(detail.to_string())
 }
 
+/// Zapíše bajty `value` na pozici `at`
+fn put_bytes(bytes: &mut [u8], at: usize, value: &[u8]) {
+    bytes[at..at + value.len()].copy_from_slice(value);
+}
+
+/// Přečte `N` bajtů z pozice `at` jako pole `[u8; N]`, `N` se odvodí z místa použití
+fn get_bytes<const N: usize>(bytes: &[u8], at: usize) -> [u8; N] {
+    let mut buf = [0u8; N];
+    buf.copy_from_slice(&bytes[at..at + N]);
+    buf
+}
+
 /// Zapíše `value` jako 4 bajty little-endian na pozici `at`
 fn put_u32(bytes: &mut [u8], at: usize, value: u32) {
-    bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    put_bytes(bytes, at, &value.to_le_bytes());
 }
 
 /// Zapíše `value` jako 8 bajtů little-endian na pozici `at`
 fn put_u64(bytes: &mut [u8], at: usize, value: u64) {
-    bytes[at..at + 8].copy_from_slice(&value.to_le_bytes());
+    put_bytes(bytes, at, &value.to_le_bytes());
 }
 
 /// Přečte 4 bajty little-endian z pozice `at`
 fn get_u32(bytes: &[u8], at: usize) -> u32 {
-    let mut buf = [0u8; 4];
-    buf.copy_from_slice(&bytes[at..at + 4]);
-    u32::from_le_bytes(buf)
+    u32::from_le_bytes(get_bytes(bytes, at))
 }
 
 /// Přečte 8 bajtů little-endian z pozice `at`
 fn get_u64(bytes: &[u8], at: usize) -> u64 {
-    let mut buf = [0u8; 8];
-    buf.copy_from_slice(&bytes[at..at + 8]);
-    u64::from_le_bytes(buf)
+    u64::from_le_bytes(get_bytes(bytes, at))
 }

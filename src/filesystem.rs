@@ -44,15 +44,16 @@ impl FileSystem {
         let mut disk = match Disk::open(path) {
             Ok(disk) => disk,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(FsError::NotFormatted),
-            // Ostatní je FsError::IO
+            // Ostatní je FsError::Io
             Err(e) => return Err(e.into()),
         };
 
         // Převod je díky implementaci From automatický na FsError
         let disk_size = disk.size()?;
 
-        // Soubor kratší než superblok náš FS obsahovat nemůže
-        // TODO, snad kratší než Superblock + one FAT index + one cluster
+        // Tady jen hlídáme, že jde přečíst celý superblok
+        // Úplnou podmínku (superblok + jedna položka FAT + jeden cluster) ověří from_bytes
+        // přes Superblock::from_bytes
         if disk_size < superblock::SUPERBLOCK_SIZE as u64 {
             return Err(FsError::NotFormatted);
         }

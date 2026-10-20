@@ -1,6 +1,4 @@
-//! Konfigurovatelné parametry pseudoFAT.
-//!
-//! Hodnoty se mění přepsáním konstanty a novým překladem programu.
+//! Konfigurovatelné parametry pseudoFAT
 
 // ---------------------------------------------------------------------------
 // Jednotky (binární, mocniny 2)
@@ -12,22 +10,22 @@ pub const KIB: u64 = 1024;
 /// Mebibajt: 1 MiB = 1024 KiB = 1 048 576 B.
 pub const MIB: u64 = 1024 * KIB;
 
+/// Gibibajt: 1 GiB = 1024 MiB = 1 073 741 824 B.
+pub const GIB: u64 = 1024 * MIB;
+
 // ---------------------------------------------------------------------------
 // Příkaz format
 // ---------------------------------------------------------------------------
 
 /// Počet bajtů, které představuje jednotka „MB“ v příkazu `format 600MB`.
-///
-/// - `MIB`       – binární jednotka, 1 MB = 1 048 576 B (výchozí)
-/// - `1_000_000` – desítková jednotka, 1 MB = 1 000 000 B
 pub const FORMAT_UNIT: u64 = MIB;
 
 // ---------------------------------------------------------------------------
 // Souborový systém
 // ---------------------------------------------------------------------------
 
-/// Velikost clusteru v bajtech pro nově formátovaný FS (běžně 512, 1024, 2048, 4096)
-///
-/// Hodnota se při formátu uloží do superbloku, takže dříve vytvořený FS s jinou
-/// velikostí clusteru půjde otevřít i po změně této konstanty
+/// Velikost clusteru v bajtech
 pub const CLUSTER_SIZE: u32 = 1024;
+
+/// Náš umělý limit pro velikost disku
+pub const MAX_DISK_SIZE: u64 = 4 * GIB;

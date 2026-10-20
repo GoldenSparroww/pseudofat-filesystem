@@ -71,6 +71,20 @@ fn lines(output: &Output) -> Vec<String> {
     String::from_utf8_lossy(&output.stdout).lines().map(str::to_string).collect()
 }
 
+/// Výstup musí mít právě jeden řádek, vrátí ho
+fn single_line(output: &Output) -> String {
+    let mut out = lines(output);
+    assert_eq!(out.len(), 1, "expected exactly one line, got: {out:?}");
+    out.remove(0)
+}
+
+/// Řádek musí obsahovat všechny části – hlášky se tak dají upravovat, aniž by se rozbily testy
+fn assert_contains(line: &str, parts: &[&str]) {
+    for part in parts {
+        assert!(line.contains(part), "{line:?} does not contain {part:?}");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Spuštění a ukončení
 // ---------------------------------------------------------------------------
@@ -104,26 +118,28 @@ fn ends_cleanly(fs: TempFs, #[case] input: &str) {
 
 /// Jeden chybný řádek vypíše právě jednu hlášku a program běží dál
 #[rstest]
-#[case::unknown_command("foo bar", "UNKNOWN COMMAND (foo)")]
-#[case::unknown_command_crlf("foo\r", "UNKNOWN COMMAND (foo)")]
-#[case::unknown_command_spaces("  foo \t bar  ", "UNKNOWN COMMAND (foo)")]
-#[case::missing_argument("cp s1", "WRONG ARGUMENTS (usage: cp <s1> <s2>)")]
-#[case::extra_argument("ls a b", "WRONG ARGUMENTS (usage: ls [a1])")]
-#[case::argument_not_expected("pwd x", "WRONG ARGUMENTS (usage: pwd)")]
-#[case::size_not_number("format abc", "INVALID SIZE (abc, expected e.g. 600MB)")]
-#[case::size_wrong_unit("format 12XB", "INVALID SIZE (12XB, expected e.g. 600MB)")]
-fn syntax_error(fs: TempFs, #[case] line: &str, #[case] expected: &str) {
+#[case::unknown_command("foo bar", &["UNKNOWN COMMAND", "(foo)"])]
+#[case::unknown_command_crlf("foo\r", &["UNKNOWN COMMAND", "(foo)"])]
+#[case::unknown_command_spaces("  foo \t bar  ", &["UNKNOWN COMMAND", "(foo)"])]
+#[case::missing_argument("cp s1", &["WRONG ARGUMENTS", "cp <s1> <s2>"])]
+#[case::extra_argument("ls a b", &["WRONG ARGUMENTS", "ls [a1]"])]
+#[case::argument_not_expected("pwd x", &["WRONG ARGUMENTS", "pwd"])]
+#[case::size_not_number("format abc", &["INVALID SIZE", "abc"])]
+#[case::size_wrong_unit("format 12XB", &["INVALID SIZE", "12XB"])]
+#[case::size_negative("format -5MB", &["INVALID SIZE", "-5MB"])]
+#[case::size_unit_only("format MB", &["INVALID SIZE"])]
+fn syntax_error(fs: TempFs, #[case] line: &str, #[case] expected: &[&str]) {
     let output = fs.run(&format!("{line}\nexit\n"));
 
-    assert_eq!(lines(&output), [expected]);
+    assert_contains(&single_line(&output), expected);
 }
 
 // ---------------------------------------------------------------------------
 // Format a rozpoznání FS
 // ---------------------------------------------------------------------------
 
-/// Hláška pro příkazy zadané dřív, než soubor obsahuje FS
-const NOT_FORMATTED: &str = "NOT FORMATTED (use: format <size>MB)";
+/// Klíčové slovo hlášky pro příkazy zadané dřív, než soubor obsahuje FS
+const NOT_FORMATTED: &str = "NOT FORMATTED";
 
 /// Jednotka příkazu format, musí odpovídat `FORMAT_UNIT` v config.rs
 const MB: u64 = 1024 * 1024;
@@ -133,7 +149,7 @@ const MB: u64 = 1024 * 1024;
 fn rejected_before_format(fs: TempFs, #[values("ls", "pwd", "cat s1", "mkdir a1", "check")] command: &str) {
     let output = fs.run(&format!("{command}\nexit\n"));
 
-    assert_eq!(lines(&output), [NOT_FORMATTED]);
+    assert_contains(&single_line(&output), &[NOT_FORMATTED]);
     assert!(!fs.path.exists(), "only format may create the file");
 }
 
@@ -151,12 +167,15 @@ fn format_creates_file(fs: TempFs, #[case] megabytes: u64) {
 
 /// Nesmyslná velikost se odmítne dřív, než se sáhne na soubor
 #[rstest]
-#[case::zero("0MB", "disk too small")]
-#[case::too_large("5000000MB", "disk too large")]
+#[case::zero("0MB", "too small")]
+// MAX_DISK_SIZE = 4 GiB = 4096 MB
+#[case::above_limit("4097MB", "too large")]
+#[case::multiplication_overflow("99999999999999MB", "too large")]
+#[case::number_overflow("99999999999999999999999MB", "too large")]
 fn format_rejects_size(fs: TempFs, #[case] size: &str, #[case] reason: &str) {
     let output = fs.run(&format!("format {size}\nexit\n"));
 
-    assert_eq!(lines(&output), [format!("CANNOT CREATE FILE ({reason})")]);
+    assert_contains(&single_line(&output), &["CANNOT CREATE FILE", reason]);
     assert!(!fs.path.exists(), "invalid size must not create the file");
 }
 
@@ -168,9 +187,7 @@ fn format_into_missing_directory() {
     };
     let output = fs.run("format 1MB\nexit\n");
 
-    let out = lines(&output);
-    assert_eq!(out.len(), 1, "unexpected output: {out:?}");
-    assert!(out[0].starts_with("CANNOT CREATE FILE ("), "unexpected output: {out:?}");
+    assert_contains(&single_line(&output), &["CANNOT CREATE FILE"]);
 }
 
 /// FS zůstane po ukončení programu v souboru a další spuštění ho rozpozná
@@ -180,7 +197,7 @@ fn formatted_fs_survives_restart(fs: TempFs) {
     let output = fs.run("pwd\nexit\n");
 
     // TODO krok 5: až bude pwd, porovnat přesně s ["/"]
-    assert_ne!(lines(&output), [NOT_FORMATTED]);
+    assert!(!single_line(&output).contains(NOT_FORMATTED));
     assert_eq!(fs.size(), 10 * MB);
 }
 
@@ -200,8 +217,9 @@ fn failed_format_keeps_old_fs(fs: TempFs) {
 
     let out = lines(&output);
     assert_eq!(out.len(), 3, "unexpected output: {out:?}");
-    assert_eq!(out[..2], ["OK", "CANNOT CREATE FILE (disk too small)"]);
-    assert_ne!(out[2], NOT_FORMATTED);
+    assert_eq!(out[0], "OK");
+    assert_contains(&out[1], &["CANNOT CREATE FILE", "too small"]);
+    assert!(!out[2].contains(NOT_FORMATTED), "old fs must stay open: {out:?}");
     assert_eq!(fs.size(), 2 * MB);
 }
 
@@ -214,7 +232,7 @@ fn foreign_file_is_not_formatted(fs: TempFs, #[case] content: &[u8]) {
     std::fs::write(&fs.path, content).unwrap();
     let output = fs.run("pwd\nexit\n");
 
-    assert_eq!(lines(&output), [NOT_FORMATTED]);
+    assert_contains(&single_line(&output), &[NOT_FORMATTED]);
     assert_eq!(
         std::fs::read(&fs.path).unwrap(),
         content,
@@ -236,6 +254,6 @@ fn truncated_fs_is_reported_as_corrupted(fs: TempFs) {
 
     let output = fs.run("pwd\nexit\n");
 
-    assert_eq!(lines(&output), [NOT_FORMATTED]);
-    assert!(String::from_utf8_lossy(&output.stderr).contains("CORRUPTED FILESYSTEM"));
+    assert_contains(&single_line(&output), &[NOT_FORMATTED]);
+    assert_contains(&String::from_utf8_lossy(&output.stderr), &["CORRUPTED"]);
 }
