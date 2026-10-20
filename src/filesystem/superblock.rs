@@ -75,6 +75,7 @@ impl Superblock {
         // e.g. cluster size + FAT index = 1024 + 4 = 1028
         let bytes_per_cluster = u64::from(cluster_size) + fat::FAT_INDEX_SIZE;
         // saturating_sub: disk menší než superblok dá 0, místo aby odečítání podteklo
+        // Celočíselné dělení zbytek zahodí, pokud není přesné
         let count = disk_size.saturating_sub(fat_start) / bytes_per_cluster;
 
         // Zde se ověřuje jestli dokáže náš FAT (u32) adresovat požadavoný počet clusterů

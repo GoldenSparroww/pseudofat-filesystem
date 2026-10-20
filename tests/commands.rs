@@ -257,3 +257,59 @@ fn truncated_fs_is_reported_as_corrupted(fs: TempFs) {
     assert_contains(&single_line(&output), &[NOT_FORMATTED]);
     assert_contains(&String::from_utf8_lossy(&output.stderr), &["CORRUPTED"]);
 }
+
+// ---------------------------------------------------------------------------
+// FAT
+// ---------------------------------------------------------------------------
+
+/// Pozice polí superbloku, které testy čtou přímo ze souboru (viz superblock.rs)
+const SB_CLUSTER_COUNT: usize = 16;
+const SB_FAT_START: usize = 32;
+
+/// Hodnota položky EOF na disku (u32::MAX - 1, little-endian)
+const RAW_EOF: [u8; 4] = [0xFE, 0xFF, 0xFF, 0xFF];
+
+/// Počet clusterů a offset FAT přečtené ze superbloku v souboru
+fn fat_layout(bytes: &[u8]) -> (usize, usize) {
+    let count = u32::from_le_bytes(bytes[SB_CLUSTER_COUNT..SB_CLUSTER_COUNT + 4].try_into().unwrap());
+    let start = u64::from_le_bytes(bytes[SB_FAT_START..SB_FAT_START + 8].try_into().unwrap());
+    (count as usize, start as usize)
+}
+
+/// Po formátu jsou všechny položky FAT volné (FREE = u32::MAX = FF FF FF FF)
+#[rstest]
+#[case::one_mb(1)]
+#[case::ten_mb(10)]
+fn format_marks_all_clusters_free(fs: TempFs, #[case] megabytes: u64) {
+    fs.run(&format!("format {megabytes}MB\nexit\n"));
+
+    let bytes = std::fs::read(&fs.path).unwrap();
+    let (count, start) = fat_layout(&bytes);
+    let fat = &bytes[start..start + count * 4];
+
+    // TODO krok 4: kořenový adresář bude mít cluster 0 označený EOF
+    assert!(count > 0);
+    assert!(fat.iter().all(|&b| b == 0xFF), "FAT must contain only FREE entries");
+}
+
+/// Při startu se FAT načte ze souboru: ručně obsazené položky ubydou z volných
+#[rstest]
+#[case::untouched(0)]
+#[case::one_used(1)]
+#[case::five_used(5)]
+fn fat_is_read_from_disk(fs: TempFs, #[case] used: usize) {
+    fs.run("format 1MB\nexit\n");
+
+    let mut bytes = std::fs::read(&fs.path).unwrap();
+    let (count, start) = fat_layout(&bytes);
+    for i in 0..used {
+        let at = start + i * 4;
+        bytes[at..at + 4].copy_from_slice(&RAW_EOF);
+    }
+    std::fs::write(&fs.path, &bytes).unwrap();
+
+    let output = fs.run("exit\n");
+
+    let free = count - used;
+    assert_contains(&String::from_utf8_lossy(&output.stderr), &[&format!("{free} free")]);
+}

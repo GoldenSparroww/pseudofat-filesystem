@@ -203,7 +203,12 @@ impl Shell {
         // Hlášení při startu jdou na stderr: nejsou odpovědí na žádný příkaz
         let fs = match FileSystem::open(&fs_path) {
             Ok(fs) => {
-                eprintln!("{}: filesystem loaded ({})", fs_path.display(), fs.superblock());
+                eprintln!(
+                    "{}: filesystem loaded ({}, {} free)",
+                    fs_path.display(),
+                    fs.superblock(),
+                    fs.free_clusters()
+                );
                 Some(fs)
             }
             Err(e) => {

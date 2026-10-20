@@ -22,6 +22,8 @@ pub enum FsError {
     // --- Další chyby ---
     /// Soubor zatím neobsahuje náš FS, povolený je jen format
     NotFormatted,
+    /// Na disku není dost volných clusterů
+    DiskFull,
     /// Data na disku si odporují, nese popis problému
     Corrupted(String),
     /// Chyba operačního systému při čtení nebo zápisu souboru se FS
@@ -37,6 +39,7 @@ impl fmt::Display for FsError {
             FsError::NotEmpty => write!(f, "NOT EMPTY"),
             FsError::CannotCreateFile(reason) => write!(f, "CANNOT CREATE FILE ({reason})"),
             FsError::NotFormatted => write!(f, "NOT FORMATTED (use: format <size>MB)"),
+            FsError::DiskFull => write!(f, "DISK FULL"),
             FsError::Corrupted(detail) => write!(f, "CORRUPTED FILESYSTEM ({detail})"),
             FsError::Io(e) => write!(f, "IO ERROR ({e})"),
         }

@@ -1,6 +1,6 @@
 //! Souborový systém pseudoFAT
 //!
-//! [`FileSystem`] drží otevřený soubor („disk“) a jeho rozložení.
+//! [`FileSystem`] drží otevřený soubor („disk“), jeho rozložení a FAT.
 
 mod disk;
 mod fat;
@@ -10,6 +10,7 @@ use std::io;
 use std::path::Path;
 
 use self::disk::Disk;
+use self::fat::FAT;
 use self::superblock::Superblock;
 use crate::config::CLUSTER_SIZE;
 use crate::error::FsError;
@@ -20,6 +21,8 @@ pub struct FileSystem {
     disk: Disk,
     /// Rozložení disku
     sb: Superblock,
+    /// FAT v paměti, změny se hned zapisují i na disk
+    fat: FAT,
 }
 
 impl FileSystem {
@@ -33,10 +36,14 @@ impl FileSystem {
         let mut disk = Disk::create(path, size).map_err(cannot_create)?;
         disk.write_at(0, &sb.to_bytes()).map_err(cannot_create)?;
 
-        // TODO krok 3: vyplnit FAT hodnotou FREE
+        // Nový soubor obsahuje samé nuly a 0 by znamenala Next(0), ne FREE –
+        // FAT je proto potřeba výslovně vyplnit (tj. FAT::new_free)
+        let fat = FAT::new_free(sb.fat_start, sb.cluster_count);
+        fat.save_all(&mut disk).map_err(cannot_create)?;
+
         // TODO krok 4: založit kořenový adresář
 
-        Ok(FileSystem { disk, sb })
+        Ok(FileSystem { disk, sb, fat })
     }
 
     /// Otevře existující FS ze souboru `path`
@@ -62,14 +69,20 @@ impl FileSystem {
         disk.read_at(0, &mut bytes)?;
         let sb = Superblock::from_bytes(&bytes, disk_size)?;
 
-        // TODO krok 3: načíst FAT do paměti
+        // Superblok je ověřený, FAT tedy leží celá uvnitř souboru
+        let fat = FAT::load(&mut disk, sb.fat_start, sb.cluster_count)?;
 
-        Ok(FileSystem { disk, sb })
+        Ok(FileSystem { disk, sb, fat })
     }
 
     /// Rozložení disku
     pub fn superblock(&self) -> &Superblock {
         &self.sb
+    }
+
+    /// Počet volných clusterů
+    pub fn free_clusters(&self) -> u32 {
+        self.fat.free_count()
     }
 }
 
