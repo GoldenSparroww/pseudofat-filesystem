@@ -4,6 +4,7 @@ version = "0.0.0"
 edition = "2024"
 
 [dependencies]
+rstest = "=0.28.0"
 
 # Závislosti jen pro testy – do výsledné binárky se nedostanou.
 [dev-dependencies]

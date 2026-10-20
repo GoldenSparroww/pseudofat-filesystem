@@ -48,6 +48,11 @@ impl TempFs {
 
         child.wait_with_output().expect("pseudofat did not finish")
     }
+
+    /// Velikost souboru se FS v bajtech
+    fn size(&self) -> u64 {
+        std::fs::metadata(&self.path).expect("fs file does not exist").len()
+    }
 }
 
 impl Drop for TempFs {
@@ -111,4 +116,126 @@ fn syntax_error(fs: TempFs, #[case] line: &str, #[case] expected: &str) {
     let output = fs.run(&format!("{line}\nexit\n"));
 
     assert_eq!(lines(&output), [expected]);
+}
+
+// ---------------------------------------------------------------------------
+// Format a rozpoznání FS
+// ---------------------------------------------------------------------------
+
+/// Hláška pro příkazy zadané dřív, než soubor obsahuje FS
+const NOT_FORMATTED: &str = "NOT FORMATTED (use: format <size>MB)";
+
+/// Jednotka příkazu format, musí odpovídat `FORMAT_UNIT` v config.rs
+const MB: u64 = 1024 * 1024;
+
+/// Bez FS se odmítne každý příkaz kromě format a exit a soubor nevznikne
+#[rstest]
+fn rejected_before_format(fs: TempFs, #[values("ls", "pwd", "cat s1", "mkdir a1", "check")] command: &str) {
+    let output = fs.run(&format!("{command}\nexit\n"));
+
+    assert_eq!(lines(&output), [NOT_FORMATTED]);
+    assert!(!fs.path.exists(), "only format may create the file");
+}
+
+/// format vytvoří soubor přesně zadané velikosti
+#[rstest]
+#[case::one_mb(1)]
+#[case::ten_mb(10)]
+#[case::six_hundred_mb(600)]
+fn format_creates_file(fs: TempFs, #[case] megabytes: u64) {
+    let output = fs.run(&format!("format {megabytes}MB\nexit\n"));
+
+    assert_eq!(lines(&output), ["OK"]);
+    assert_eq!(fs.size(), megabytes * MB);
+}
+
+/// Nesmyslná velikost se odmítne dřív, než se sáhne na soubor
+#[rstest]
+#[case::zero("0MB", "disk too small")]
+#[case::too_large("5000000MB", "disk too large")]
+fn format_rejects_size(fs: TempFs, #[case] size: &str, #[case] reason: &str) {
+    let output = fs.run(&format!("format {size}\nexit\n"));
+
+    assert_eq!(lines(&output), [format!("CANNOT CREATE FILE ({reason})")]);
+    assert!(!fs.path.exists(), "invalid size must not create the file");
+}
+
+/// Soubor ve složce, která neexistuje, nejde vytvořit
+#[test]
+fn format_into_missing_directory() {
+    let fs = TempFs {
+        path: std::env::temp_dir().join("pseudofat-missing-dir").join("fs.dat"),
+    };
+    let output = fs.run("format 1MB\nexit\n");
+
+    let out = lines(&output);
+    assert_eq!(out.len(), 1, "unexpected output: {out:?}");
+    assert!(out[0].starts_with("CANNOT CREATE FILE ("), "unexpected output: {out:?}");
+}
+
+/// FS zůstane po ukončení programu v souboru a další spuštění ho rozpozná
+#[rstest]
+fn formatted_fs_survives_restart(fs: TempFs) {
+    fs.run("format 10MB\nexit\n");
+    let output = fs.run("pwd\nexit\n");
+
+    // TODO krok 5: až bude pwd, porovnat přesně s ["/"]
+    assert_ne!(lines(&output), [NOT_FORMATTED]);
+    assert_eq!(fs.size(), 10 * MB);
+}
+
+/// Opakovaný format přepíše existující FS novým (i menším)
+#[rstest]
+fn reformat_replaces_fs(fs: TempFs) {
+    let output = fs.run("format 10MB\nformat 2MB\nexit\n");
+
+    assert_eq!(lines(&output), ["OK", "OK"]);
+    assert_eq!(fs.size(), 2 * MB);
+}
+
+/// Neúspěšný format nechá původní FS funkční
+#[rstest]
+fn failed_format_keeps_old_fs(fs: TempFs) {
+    let output = fs.run("format 2MB\nformat 0MB\npwd\nexit\n");
+
+    let out = lines(&output);
+    assert_eq!(out.len(), 3, "unexpected output: {out:?}");
+    assert_eq!(out[..2], ["OK", "CANNOT CREATE FILE (disk too small)"]);
+    assert_ne!(out[2], NOT_FORMATTED);
+    assert_eq!(fs.size(), 2 * MB);
+}
+
+/// Soubor bez našeho FS se nerozpozná a zůstane nedotčený
+#[rstest]
+#[case::empty(b"")]
+#[case::short_text(b"hello world\n")]
+#[case::garbage(&[0xAB; 4096])]
+fn foreign_file_is_not_formatted(fs: TempFs, #[case] content: &[u8]) {
+    std::fs::write(&fs.path, content).unwrap();
+    let output = fs.run("pwd\nexit\n");
+
+    assert_eq!(lines(&output), [NOT_FORMATTED]);
+    assert_eq!(
+        std::fs::read(&fs.path).unwrap(),
+        content,
+        "foreign file must stay untouched"
+    );
+}
+
+/// Superblok, který neodpovídá souboru, se při startu nahlásí jako poškozený
+#[rstest]
+fn truncated_fs_is_reported_as_corrupted(fs: TempFs) {
+    fs.run("format 2MB\nexit\n");
+    // Po zkrácení tvrdí superblok jinou velikost disku, než má soubor
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&fs.path)
+        .unwrap()
+        .set_len(MB)
+        .unwrap();
+
+    let output = fs.run("pwd\nexit\n");
+
+    assert_eq!(lines(&output), [NOT_FORMATTED]);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("CORRUPTED FILESYSTEM"));
 }

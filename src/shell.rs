@@ -5,6 +5,8 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 
 use crate::config::FORMAT_UNIT;
+use crate::error::FsError;
+use crate::filesystem::FileSystem;
 
 /// Syntakticky správný příkaz včetně parametrů
 #[derive(Debug)]
@@ -186,19 +188,33 @@ enum Flow {
 
 /// Stav běžícího shellu
 pub struct Shell {
+    /// Cesta k souboru se souborovým systémem (parametr programu)
     fs_path: PathBuf,
+    /// Otevřený FS, `None` dokud soubor neobsahuje platný FS (pak funguje jen format)
+    fs: Option<FileSystem>,
 }
 
 impl Shell {
+    /// Otevře FS ze souboru `fs_path`, pokud v něm nějaký je
     pub fn new(fs_path: PathBuf) -> Self {
-        Shell { fs_path }
+        // Hlášení při startu jdou na stderr: nejsou odpovědí na žádný příkaz
+        let fs = match FileSystem::open(&fs_path) {
+            Ok(fs) => {
+                eprintln!("{}: filesystem loaded ({})", fs_path.display(), fs.superblock());
+                Some(fs)
+            }
+            Err(e) => {
+                eprintln!("{}: {e}", fs_path.display());
+                None
+            }
+        };
+
+        Shell { fs_path, fs }
     }
 
-    /// Hlavní smyčka: čte příkazy ze standardního vstupu, dokud nepřijde
-    /// `exit` nebo konec vstupu (Ctrl+D, konec přesměrovaného souboru)
+    /// Hlavní smyčka
     pub fn run(&mut self) {
-        // Výzvu zobrazujeme jen při ručním psaní. Když je vstup přesměrovaný
-        // ze souboru nebo z testu, výzva by jen znečistila výstup
+        // Výzvu zobrazujeme jen při ručním psaní (u testů špiní výstup)
         let interactive = io::stdin().is_terminal();
         let mut stdin = io::stdin().lock();
         let mut buf = Vec::new();
@@ -253,14 +269,51 @@ impl Shell {
         }
     }
 
-    /// Vykoná syntakticky správný příkaz
+    /// Vykoná syntakticky správný příkaz a vypíše výsledek
     fn execute(&mut self, command: Command) -> Flow {
-        match command {
-            Command::Exit => Flow::Exit,
-            _ => {
-                println!("NOT IMPLEMENTED");
-                Flow::Continue
+        let result = match command {
+            Command::Exit => return Flow::Exit,
+            Command::Format { size_bytes } => self.format(size_bytes),
+            _ => self.not_implemented(),
+        };
+
+        // Sémantické chyby jsou odpovědí na příkaz stejně jako OK – patří na stdout
+        if let Err(e) = result {
+            println!("{e}");
+        }
+
+        Flow::Continue
+    }
+
+    /// Vrátí otevřený FS, nebo chybu, pokud ještě není naformátovaný
+    fn require_fs(&mut self) -> Result<&mut FileSystem, FsError> {
+        self.fs.as_mut().ok_or(FsError::NotFormatted)
+    }
+
+    /// format: přepíše soubor novým prázdným FS
+    fn format(&mut self, size_bytes: u64) -> Result<(), FsError> {
+        // Starý FS zavřeme, aby soubor nebyl při přepisování otevřený dvakrát
+        self.fs = None;
+
+        match FileSystem::format(&self.fs_path, size_bytes) {
+            Ok(fs) => {
+                self.fs = Some(fs);
+                println!("OK");
+                Ok(())
+            }
+            Err(e) => {
+                // Format mohl selhat ještě před zásahem do souboru (nesmyslná velikost).
+                // Původní FS pak zůstal netknutý, takže ho zkusíme otevřít znovu
+                self.fs = FileSystem::open(&self.fs_path).ok();
+                Err(e)
             }
         }
+    }
+
+    /// Zástupce za zatím neimplementované příkazy
+    fn not_implemented(&mut self) -> Result<(), FsError> {
+        self.require_fs()?;
+        println!("NOT IMPLEMENTED");
+        Ok(())
     }
 }

@@ -8,6 +8,8 @@
 //! ```
 
 mod config;
+mod error;
+mod filesystem;
 mod shell;
 
 use std::env;
@@ -27,7 +29,6 @@ fn main() -> ExitCode {
         eprintln!("Usage: pseudofat <fs-file>");
         return ExitCode::FAILURE;
     };
-
 
     let mut shell = Shell::new(PathBuf::from(fs_path));
     shell.run();
