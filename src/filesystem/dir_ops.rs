@@ -7,8 +7,7 @@ use crate::error::FsError;
 impl FileSystem {
     /// mkdir: vytvoří prázdný adresář
     pub fn mkdir(&mut self, path: &str) -> Result<(), FsError> {
-        // Všechny kontroly (rodič, jméno, EXIST, volný slot) proběhnou dřív, než se cokoliv
-        // změní – při chybě se tak nepřidělí cluster, který by pak nikomu nepatřil
+        // Všechny kontroly (rodič, jméno, EXIST, volný slot)
         let (mut parent, name) = self.resolve_new(path)?;
 
         // Pořadí zápisů: FAT a obsah nového adresáře nejdřív, položka v rodiči až nakonec.

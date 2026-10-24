@@ -1,13 +1,4 @@
 //! Překlad cest uvnitř pseudoFAT
-//!
-//! Cesta je absolutní (začíná `/`, překlad začne v kořeni), nebo relativní (začne v aktuálním
-//! adresáři). Části oddělené `/` se zpracují zleva doprava:
-//!
-//! - `.` – zůstane se v adresáři,
-//! - `..` – přejde se do rodiče (podle položky `..`, kořen je rodičem sám sobě),
-//! - jméno – přejde se do podadresáře, který musí existovat (jinak PATH NOT FOUND).
-//!
-//! Prázdné části (`a//b`, `a/`) se ignorují
 
 use super::FileSystem;
 use super::dir::{Dir, DirEntry, EntryKind, Name};
@@ -15,7 +6,7 @@ use super::fat::FATEntry;
 use crate::error::{FsError, corrupted};
 
 impl FileSystem {
-    /// Načte adresář z clusteru `cluster`
+    /// Načte adresář z `cluster`
     pub(super) fn load_dir(&mut self, cluster: u32) -> Result<Dir, FsError> {
         // Dvě výpůjčky různých polí self najednou (disk mutable, sb sdíleně) jsou v pořádku
         Dir::load(&mut self.disk, &self.sb, cluster)
@@ -32,24 +23,23 @@ impl FileSystem {
     }
 
     /// Rozloží cestu nové položky na rodičovský adresář a jméno nové položky
-    ///
-    /// Ověří vše, co lze ověřit před vytvořením:
-    /// - rodič existuje → jinak [`FsError::PathNotFound`],
-    /// - jméno je platné 8.3 → jinak [`FsError::InvalidName`],
-    /// - položka ještě neexistuje → jinak [`FsError::Exist`] (`.`, `..` a `/` existují vždy),
-    /// - v rodiči je volný slot → jinak [`FsError::DirFull`].
     pub(super) fn resolve_new(&mut self, path: &str) -> Result<(Dir, Name), FsError> {
+        // rodič existuje → jinak [`FsError::PathNotFound`]
         let (parent, last) = self.walk(path)?;
 
+        // jméno je platné 8.3 → jinak [`FsError::InvalidName`]
         let Some(name) = last else {
             return Err(FsError::Exist);
         };
         let name = Name::parse(name)?;
 
+        // položka ještě neexistuje → jinak [`FsError::Exist`] (`.`, `..` a `/` existují vždy),
         let dir = self.load_dir(parent)?;
         if dir.find(&name).is_some() {
             return Err(FsError::Exist);
         }
+
+        // v rodiči je volný slot → jinak [`FsError::DirFull`]
         if dir.is_full() {
             return Err(FsError::DirFull);
         }
@@ -58,13 +48,12 @@ impl FileSystem {
     }
 
     /// Absolutní cesta k adresáři `cluster`, např. `/a/b`
-    ///
-    /// Adresář nezná své jméno – to je uložené v rodiči. Postupuje se proto přes `..` nahoru ke
-    /// kořeni a v každém rodiči se hledá položka, která ukazuje na adresář o úroveň níž
     pub(super) fn path_of(&mut self, cluster: u32) -> Result<String, FsError> {
         let mut names = Vec::new();
         let mut current = cluster;
 
+        // Adresář nezná své jméno – to je uložené v rodiči. Postupuje se proto přes `..` nahoru ke
+        // kořeni a v každém rodiči se hledá položka, která ukazuje na adresář o úroveň níž
         while current != self.sb.root_cluster {
             // V poškozeném FS může `..` vést do kruhu. Strom hlubší než počet clusterů
             // neexistuje (každý adresář má vlastní cluster)
@@ -92,18 +81,8 @@ impl FileSystem {
         Ok(format!("/{}", names.join("/")))
     }
 
-    /// Projde cestu `path` až po poslední část
-    ///
-    /// Vrátí cluster adresáře, ve kterém překlad skončil, a poslední část cesty, pokud je to
-    /// obyčejné jméno – co s ním udělat (najít, vytvořit, …), rozhodne volající:
-    ///
-    /// | cesta    | výsledek                     |
-    /// |----------|------------------------------|
-    /// | `a/b/c`  | (cluster `a/b`, `Some("c")`) |
-    /// | `a/b/..` | (cluster `a`, `None`)        |
-    /// | `/`      | (kořen, `None`)              |
-    ///
-    /// Chybějící adresář po cestě nebo soubor místo adresáře vrátí [`FsError::PathNotFound`]
+    /// Projde cestu `path` až po poslední část. Vrátí cluster adresáře, 
+    /// ve kterém překlad skončil, a poslední část cesty, pokud je to obyčejné jméno
     fn walk<'p>(&mut self, path: &'p str) -> Result<(u32, Option<&'p str>), FsError> {
         let mut cluster = if path.starts_with('/') {
             self.sb.root_cluster
@@ -111,9 +90,10 @@ impl FileSystem {
             self.cwd
         };
 
+        // Ignore prázdných míst
         let mut parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
 
-        // Poslední část se nechá volajícímu, jen když je to jméno – `.` a `..` se vyřeší hned
+        // Poslední část dáme volajícímu ať si s ní dělá co chce, jen u – `.` a `..` se vyřeší hned na None
         let last = parts.last().copied().filter(|&part| part != "." && part != "..");
         if last.is_some() {
             parts.pop();
@@ -156,9 +136,8 @@ impl FileSystem {
     }
 }
 
-/// Cluster adresáře, na který ukazuje položka `entry`
-///
-/// Adresář má vždy právě jeden cluster, `start` proto musí být `Next(c)`
+/// Cluster adresáře, na který ukazuje položka `entry`.
+/// Adresář má vždy právě jeden cluster, `start` proto musí být `Next(c)`.
 fn dir_cluster(entry: &DirEntry) -> Result<u32, FsError> {
     match entry.start {
         FATEntry::Next(cluster) => Ok(cluster),
