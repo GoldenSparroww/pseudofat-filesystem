@@ -157,6 +157,14 @@ enum Flow {
     Exit,
 }
 
+/// Výsledek úspěšného příkazu – vypisuje ho jen [`Shell::execute`]
+enum Output {
+    /// Vypíše „OK“
+    Ok,
+    /// Vypíše řádky textu (výsledek ls, pwd, …)
+    Lines(Vec<String>),
+}
+
 /// Stav běžícího shellu
 pub struct Shell {
     /// Cesta k souboru se souborovým systémem (parametr programu)
@@ -247,18 +255,41 @@ impl Shell {
 
     /// Vykoná syntakticky správný příkaz a vypíše výsledek
     fn execute(&mut self, command: Command) -> Flow {
-        let result = match command {
-            Command::Exit => return Flow::Exit,
-            Command::Format { size_bytes } => self.format(size_bytes),
-            _ => self.not_implemented(),
-        };
+        if let Command::Exit = command {
+            return Flow::Exit;
+        }
 
-        // Sémantické chyby jsou odpovědí na příkaz stejně jako OK – patří na stdout
-        if let Err(e) = result {
-            println!("{e}");
+        match self.run_command(command) {
+            Ok(Output::Ok) => println!("OK"),
+            Ok(Output::Lines(lines)) => {
+                for line in lines {
+                    println!("{line}");
+                }
+            }
+            // Sémantické chyby jsou odpovědí na příkaz stejně jako OK – patří na stdout
+            Err(e) => println!("{e}"),
         }
 
         Flow::Continue
+    }
+
+    /// Vykoná příkaz a vrátí výsledek k vypsání
+    fn run_command(&mut self, command: Command) -> Result<Output, FsError> {
+        // format jako jediný funguje i bez naformátovaného FS
+        if let Command::Format { size_bytes } = command {
+            return self.format(size_bytes);
+        }
+
+        // Všechny ostatní příkazy potřebují FS – bez něj skončí tady s NOT FORMATTED
+        let fs = self.require_fs()?;
+
+        match command {
+            Command::Mkdir { path } => fs.mkdir(&path).map(|()| Output::Ok),
+            Command::Cd { path } => fs.cd(&path).map(|()| Output::Ok),
+            Command::Pwd => fs.pwd().map(|path| Output::Lines(vec![path])),
+            Command::Ls { path } => fs.ls(path.as_deref()).map(Output::Lines),
+            _ => Ok(Output::Lines(vec!["NOT IMPLEMENTED".to_string()])),
+        }
     }
 
     /// Vrátí otevřený FS, nebo chybu, pokud ještě není naformátovaný
@@ -267,15 +298,14 @@ impl Shell {
     }
 
     /// format: přepíše soubor novým prázdným FS
-    fn format(&mut self, size_bytes: u64) -> Result<(), FsError> {
+    fn format(&mut self, size_bytes: u64) -> Result<Output, FsError> {
         // Starý FS zavřeme, aby soubor nebyl při přepisování otevřený dvakrát
         self.fs = None;
 
         match FileSystem::format(&self.fs_path, size_bytes) {
             Ok(fs) => {
                 self.fs = Some(fs);
-                println!("OK");
-                Ok(())
+                Ok(Output::Ok)
             }
             Err(e) => {
                 // Format mohl selhat ještě před zásahem do souboru (nesmyslná velikost).
@@ -284,12 +314,5 @@ impl Shell {
                 Err(e)
             }
         }
-    }
-
-    /// Zástupce za zatím neimplementované příkazy
-    fn not_implemented(&mut self) -> Result<(), FsError> {
-        self.require_fs()?;
-        println!("NOT IMPLEMENTED");
-        Ok(())
     }
 }

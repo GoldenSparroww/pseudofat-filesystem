@@ -221,6 +221,17 @@ impl Dir {
         self.slots.iter().flatten()
     }
 
+    /// Obsah adresáře: obsazené položky bez `.` a `..`
+    pub fn children(&self) -> impl Iterator<Item = &DirEntry> {
+        self.entries()
+            .filter(|entry| entry.name != Name::DOT && entry.name != Name::DOTDOT)
+    }
+
+    /// Žádný slot není volný
+    pub fn is_full(&self) -> bool {
+        self.slots.iter().all(Option::is_some)
+    }
+
     /// Položka se jménem `name`
     pub fn find(&self, name: &Name) -> Option<&DirEntry> {
         self.entries().find(|entry| entry.name == *name)

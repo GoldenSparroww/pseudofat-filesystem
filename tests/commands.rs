@@ -53,6 +53,15 @@ impl TempFs {
     fn size(&self) -> u64 {
         std::fs::metadata(&self.path).expect("fs file does not exist").len()
     }
+
+    /// Naformátuje FS na 1 MB, vykoná `commands` (řádky oddělené `\n`) a vrátí jejich výstup
+    /// bez úvodního „OK“ formátu
+    fn run_formatted(&self, commands: &str) -> Vec<String> {
+        let mut out = lines(&self.run(&format!("format 1MB\n{commands}\nexit\n")));
+        assert_eq!(out.first().map(String::as_str), Some("OK"), "format failed: {out:?}");
+        out.remove(0);
+        out
+    }
 }
 
 impl Drop for TempFs {
@@ -83,6 +92,21 @@ fn assert_contains(line: &str, parts: &[&str]) {
     for part in parts {
         assert!(line.contains(part), "{line:?} does not contain {part:?}");
     }
+}
+
+/// Výstup musí řádek po řádku odpovídat `expected`
+///
+/// Řádek odpovídá, když je stejný, nebo když za očekávaným textem následuje už jen podrobnost
+/// v závorce: `"EXIST"` odpovídá i `"EXIST (a)"`, ale `"DIR: a"` neodpovídá `"DIR: ab"`
+fn assert_lines(actual: &[String], expected: &[&str]) {
+    let matches = |actual: &str, expected: &str| {
+        actual == expected || actual.strip_prefix(expected).is_some_and(|rest| rest.starts_with(" ("))
+    };
+
+    assert!(
+        actual.len() == expected.len() && actual.iter().zip(expected).all(|(a, e)| matches(a, e)),
+        "output does not match\n  actual: {actual:?}\nexpected: {expected:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -196,8 +220,7 @@ fn formatted_fs_survives_restart(fs: TempFs) {
     fs.run("format 10MB\nexit\n");
     let output = fs.run("pwd\nexit\n");
 
-    // TODO krok 5: až bude pwd, porovnat přesně s ["/"]
-    assert!(!single_line(&output).contains(NOT_FORMATTED));
+    assert_eq!(lines(&output), ["/"]);
     assert_eq!(fs.size(), 10 * MB);
 }
 
@@ -219,7 +242,7 @@ fn failed_format_keeps_old_fs(fs: TempFs) {
     assert_eq!(out.len(), 3, "unexpected output: {out:?}");
     assert_eq!(out[0], "OK");
     assert_contains(&out[1], &["CANNOT CREATE FILE", "too small"]);
-    assert!(!out[2].contains(NOT_FORMATTED), "old fs must stay open: {out:?}");
+    assert_eq!(out[2], "/", "old fs must stay open: {out:?}");
     assert_eq!(fs.size(), 2 * MB);
 }
 
@@ -332,7 +355,7 @@ fn fat_is_read_from_disk(fs: TempFs, #[case] used: usize) {
     let output = fs.run("exit\n");
 
     let free = count - 1 - used;
-    assert_contains(&String::from_utf8_lossy(&output.stderr), &[&format!("{free} free")]);
+    assert_contains(&String::from_utf8_lossy(&output.stderr), &[&format!(", {free} free)")]);
 }
 
 /// Kořenový adresář obsahuje jen "." a "..", obě ukazují na kořen; zbytek clusteru je prázdný
@@ -360,4 +383,100 @@ fn format_creates_root_directory(fs: TempFs) {
         cluster[2 * DIR_ENTRY_SIZE..].iter().all(|&b| b == 0),
         "other slots must be free"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Adresáře a cesty: mkdir, ls, cd, pwd
+// ---------------------------------------------------------------------------
+
+/// Příkazy nad čerstvě naformátovaným FS a jejich výstup (řádek na příkaz, ls řádek na položku)
+#[rstest]
+// Základní příkazy
+#[case::mkdir_and_ls("mkdir a\nls", &["OK", "DIR: a"])]
+#[case::ls_empty_root("ls", &[])]
+#[case::ls_keeps_creation_order("mkdir b\nmkdir a\nls", &["OK", "OK", "DIR: b", "DIR: a"])]
+#[case::pwd_root("pwd", &["/"])]
+#[case::cd_and_pwd("mkdir a\ncd a\npwd", &["OK", "OK", "/a"])]
+#[case::nested("mkdir a\nmkdir a/b\ncd a/b\npwd", &["OK", "OK", "OK", "/a/b"])]
+#[case::ls_with_path("mkdir a\nmkdir a/b\nls a\nls a/b", &["OK", "OK", "DIR: b"])]
+#[case::name_with_extension("mkdir dir.ext\nls\ncd dir.ext\npwd", &["OK", "DIR: dir.ext", "OK", "/dir.ext"])]
+#[case::case_sensitive("mkdir a\nmkdir A\nls", &["OK", "OK", "DIR: a", "DIR: A"])]
+// Absolutní a relativní cesty, . a ..
+#[case::absolute_from_subdir(
+    "mkdir a\nmkdir b\ncd a\nmkdir /b/c\nls /b",
+    &["OK", "OK", "OK", "OK", "DIR: c"]
+)]
+#[case::relative_dotdot(
+    "mkdir a\ncd a\nmkdir ../b\ncd ..\nls",
+    &["OK", "OK", "OK", "OK", "DIR: a", "DIR: b"]
+)]
+#[case::dot_and_dotdot_mixed("mkdir a\nmkdir a/b\ncd ./a/../a/./b\npwd", &["OK", "OK", "OK", "/a/b"])]
+#[case::dotdot_at_root("cd ..\npwd\ncd ../../..\npwd", &["OK", "/", "OK", "/"])]
+#[case::cd_root("mkdir a\ncd a\ncd /\npwd", &["OK", "OK", "OK", "/"])]
+#[case::cd_dotdot_twice("mkdir a\nmkdir a/b\ncd a/b\ncd ../..\npwd", &["OK", "OK", "OK", "OK", "/"])]
+#[case::repeated_slashes("mkdir a\nmkdir //a///b/\ncd /a//b\npwd", &["OK", "OK", "OK", "/a/b"])]
+#[case::ls_dot_and_dotdot("mkdir a\ncd a\nls .\nls ..", &["OK", "OK", "DIR: a"])]
+// Chyby
+#[case::mkdir_exists("mkdir a\nmkdir a", &["OK", "EXIST"])]
+#[case::mkdir_exists_by_other_path("mkdir a\ncd a\nmkdir ../a\nmkdir /a", &["OK", "OK", "EXIST", "EXIST"])]
+#[case::mkdir_dot_dotdot_root("mkdir .\nmkdir ..\nmkdir /", &["EXIST", "EXIST", "EXIST"])]
+#[case::mkdir_missing_parent("mkdir a/b\nls", &["PATH NOT FOUND"])]
+#[case::mkdir_invalid_name("mkdir abcdefghi\nmkdir a.txtx\nmkdir a.\nls", &["INVALID NAME"; 3])]
+#[case::cd_missing_keeps_cwd("mkdir a\ncd a\ncd b\npwd", &["OK", "OK", "PATH NOT FOUND", "/a"])]
+#[case::cd_missing_nested("mkdir a\ncd a/b/c", &["OK", "PATH NOT FOUND"])]
+#[case::cd_invalid_name("cd abcdefghijk", &["PATH NOT FOUND"])]
+#[case::ls_missing("ls a\nls a/..", &["PATH NOT FOUND", "PATH NOT FOUND"])]
+fn directories(fs: TempFs, #[case] commands: &str, #[case] expected: &[&str]) {
+    assert_lines(&fs.run_formatted(commands), expected);
+}
+
+/// Adresáře zůstanou po restartu, aktuální adresář se vrátí na `/`
+#[rstest]
+fn directories_survive_restart(fs: TempFs) {
+    fs.run("format 1MB\nmkdir a\nmkdir a/b\ncd a/b\nexit\n");
+    let output = fs.run("pwd\nls\nls a\ncd a/b\npwd\nexit\n");
+
+    assert_eq!(lines(&output), ["/", "DIR: a", "DIR: b", "OK", "/a/b"]);
+}
+
+/// mkdir zabere právě jeden cluster, neúspěšný mkdir žádný
+#[rstest]
+#[case::one_dir("mkdir a", 1)]
+#[case::nested("mkdir a\nmkdir a/b\nmkdir a/b/c", 3)]
+#[case::failed_exist("mkdir a\nmkdir a", 1)]
+#[case::failed_missing_parent("mkdir x/y", 0)]
+#[case::failed_invalid_name("mkdir abcdefghi", 0)]
+fn mkdir_uses_one_cluster(fs: TempFs, #[case] commands: &str, #[case] dirs: usize) {
+    fs.run(&format!("format 1MB\n{commands}\nexit\n"));
+    let count = read_u32(&std::fs::read(&fs.path).unwrap(), SB_CLUSTER_COUNT);
+
+    let output = fs.run("exit\n");
+
+    let free = count - 1 - dirs;
+    assert_contains(&String::from_utf8_lossy(&output.stderr), &[&format!(", {free} free)")]);
+}
+
+/// Adresář zabírá jeden cluster: vejde se do něj `cluster_size / 32` položek, dvě z nich jsou
+/// `.` a `..`. Plný adresář další položku odmítne a nezabere pro ni cluster
+#[rstest]
+fn directory_full(fs: TempFs) {
+    fs.run("format 1MB\nexit\n");
+    let bytes = std::fs::read(&fs.path).unwrap();
+    let count = read_u32(&bytes, SB_CLUSTER_COUNT);
+    let capacity = read_u32(&bytes, SB_CLUSTER_SIZE) / DIR_ENTRY_SIZE - 2;
+
+    // capacity + 1 pokusů, poslední se už nevejde
+    let commands: String = (0..=capacity).map(|i| format!("mkdir d{i}\n")).collect();
+    let out = lines(&fs.run(&format!("{commands}ls\nexit\n")));
+
+    assert_eq!(out.len(), capacity + 1 + capacity, "unexpected output: {out:?}");
+    assert!(
+        out[..capacity].iter().all(|line| line == "OK"),
+        "unexpected output: {out:?}"
+    );
+    assert_contains(&out[capacity], &["DIRECTORY FULL"]);
+
+    let output = fs.run("exit\n");
+    let free = count - 1 - capacity;
+    assert_contains(&String::from_utf8_lossy(&output.stderr), &[&format!(", {free} free)")]);
 }

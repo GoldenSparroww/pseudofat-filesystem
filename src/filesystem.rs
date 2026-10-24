@@ -4,8 +4,10 @@
 
 mod bytes;
 mod dir;
+mod dir_ops;
 mod disk;
 mod fat;
+mod path;
 mod superblock;
 
 use std::io;
@@ -26,6 +28,8 @@ pub struct FileSystem {
     sb: Superblock,
     /// FAT v paměti, změny se hned zapisují i na disk
     fat: FAT,
+    /// Cluster aktuálního adresáře – jen stav běžícího programu, na disk se neukládá
+    cwd: u32,
 }
 
 impl FileSystem {
@@ -49,7 +53,8 @@ impl FileSystem {
         fat.set(&mut disk, sb.root_cluster, FATEntry::EOF).map_err(cannot_create)?;
         Dir::init(&mut disk, &sb, sb.root_cluster, sb.root_cluster).map_err(cannot_create)?;
 
-        Ok(FileSystem { disk, sb, fat })
+        let cwd = sb.root_cluster;
+        Ok(FileSystem { disk, sb, fat, cwd })
     }
 
     /// Otevře existující FS ze souboru `path`
@@ -66,7 +71,9 @@ impl FileSystem {
         // Superblok je ověřený, FAT tedy leží celá uvnitř souboru
         let fat = FAT::load(&mut disk, sb.fat_start, sb.cluster_count)?;
 
-        Ok(FileSystem { disk, sb, fat })
+        // Po spuštění programu je aktuálním adresářem vždy kořen
+        let cwd = sb.root_cluster;
+        Ok(FileSystem { disk, sb, fat, cwd })
     }
 
     /// Rozložení disku
