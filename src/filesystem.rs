@@ -2,6 +2,8 @@
 //!
 //! [`FileSystem`] drží otevřený soubor („disk“), jeho rozložení a FAT.
 
+mod bytes;
+mod dir;
 mod disk;
 mod fat;
 mod superblock;
@@ -9,11 +11,12 @@ mod superblock;
 use std::io;
 use std::path::Path;
 
+use self::dir::Dir;
 use self::disk::Disk;
-use self::fat::FAT;
+use self::fat::{FAT, FATEntry};
 use self::superblock::Superblock;
 use crate::config::CLUSTER_SIZE;
-use crate::error::FsError;
+use crate::error::{FsError, cannot_create};
 
 /// Otevřený souborový systém
 pub struct FileSystem {
@@ -34,14 +37,17 @@ impl FileSystem {
         let sb = Superblock::new(size, CLUSTER_SIZE).map_err(cannot_create)?;
 
         let mut disk = Disk::create(path, size).map_err(cannot_create)?;
-        disk.write_at(0, &sb.to_bytes()).map_err(cannot_create)?;
+        sb.save(&mut disk).map_err(cannot_create)?;
 
         // Nový soubor obsahuje samé nuly a 0 by znamenala Next(0), ne FREE –
         // FAT je proto potřeba výslovně vyplnit (tj. FAT::new_free)
-        let fat = FAT::new_free(sb.fat_start, sb.cluster_count);
+        let mut fat = FAT::new_free(sb.fat_start, sb.cluster_count);
         fat.save_all(&mut disk).map_err(cannot_create)?;
 
-        // TODO krok 4: založit kořenový adresář
+        // Kořenový adresář: zabere cluster určený superblokem (jako každý adresář právě jeden,
+        // proto hned EOF), jeho ".." ukazuje na něj samotného
+        fat.set(&mut disk, sb.root_cluster, FATEntry::EOF).map_err(cannot_create)?;
+        Dir::init(&mut disk, &sb, sb.root_cluster, sb.root_cluster).map_err(cannot_create)?;
 
         Ok(FileSystem { disk, sb, fat })
     }
@@ -55,19 +61,7 @@ impl FileSystem {
             Err(e) => return Err(e.into()),
         };
 
-        // Převod je díky implementaci From automatický na FsError
-        let disk_size = disk.size()?;
-
-        // Tady jen hlídáme, že jde přečíst celý superblok
-        // Úplnou podmínku (superblok + jedna položka FAT + jeden cluster) ověří from_bytes
-        // přes Superblock::from_bytes
-        if disk_size < superblock::SUPERBLOCK_SIZE as u64 {
-            return Err(FsError::NotFormatted);
-        }
-
-        let mut bytes = [0u8; superblock::SUPERBLOCK_SIZE];
-        disk.read_at(0, &mut bytes)?;
-        let sb = Superblock::from_bytes(&bytes, disk_size)?;
+        let sb = Superblock::load(&mut disk)?;
 
         // Superblok je ověřený, FAT tedy leží celá uvnitř souboru
         let fat = FAT::load(&mut disk, sb.fat_start, sb.cluster_count)?;
@@ -84,9 +78,4 @@ impl FileSystem {
     pub fn free_clusters(&self) -> u32 {
         self.fat.free_count()
     }
-}
-
-/// Helper: Chyba formátu s důvodem (text chyby OS nebo výpočtu rozložení)
-fn cannot_create(reason: impl ToString) -> FsError {
-    FsError::CannotCreateFile(reason.to_string())
 }

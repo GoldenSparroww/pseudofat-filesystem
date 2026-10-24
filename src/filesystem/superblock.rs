@@ -1,10 +1,14 @@
 //! Superblok – popis rozložení FS, uložený na začátku souboru
 
 use std::fmt;
+use std::io;
 
+use super::bytes::{get_bytes, get_u32, get_u64, put_bytes, put_u32, put_u64};
+use super::disk::Disk;
 use super::fat;
 use crate::config::{CLUSTER_SIZE, FORMAT_UNIT, MAX_DISK_SIZE};
 use crate::error::FsError;
+use crate::error::corrupted;
 
 /// Velikost oblasti vyhrazené pro superblok
 pub const SUPERBLOCK_SIZE: usize = 64;
@@ -71,6 +75,10 @@ impl Superblock {
             ));
         }
 
+        if !cluster_size.is_power_of_two() {
+            return Err(format!("Cluster size must be a power of two ({cluster_size} B given)."));
+        }
+
         let fat_start = SUPERBLOCK_SIZE as u64;
         // e.g. cluster size + FAT index = 1024 + 4 = 1028
         let bytes_per_cluster = u64::from(cluster_size) + fat::FAT_INDEX_SIZE;
@@ -107,8 +115,33 @@ impl Superblock {
         })
     }
 
+    /// Načte a ověří superblok ze začátku disku
+    pub fn load(disk: &mut Disk) -> Result<Superblock, FsError> {
+        let disk_size = disk.size()?;
+
+        // Tady jen hlídáme, že jde přečíst celý superblok
+        // Úplnou podmínku (superblok + jedna položka FAT + jeden cluster) Superblock::new
+        if disk_size < SUPERBLOCK_SIZE as u64 {
+            return Err(FsError::NotFormatted);
+        }
+
+        let mut bytes = [0u8; SUPERBLOCK_SIZE];
+        disk.read_at(0, &mut bytes)?;
+        Superblock::from_bytes(&bytes, disk_size)
+    }
+
+    /// Zapíše superblok na začátek disku
+    pub fn save(&self, disk: &mut Disk) -> io::Result<()> {
+        disk.write_at(0, &self.to_bytes())
+    }
+
+    /// Offset clusteru `cluster` musí být platné číslo (menší než `cluster_count`)
+    pub fn cluster_offset(&self, cluster: u32) -> u64 {
+        self.data_start + u64::from(cluster) * u64::from(self.cluster_size)
+    }
+
     /// Vrátí jen superblok, který popisuje platný FS
-    pub fn from_bytes(bytes: &[u8; SUPERBLOCK_SIZE], disk_size: u64) -> Result<Superblock, FsError> {
+    fn from_bytes(bytes: &[u8; SUPERBLOCK_SIZE], disk_size: u64) -> Result<Superblock, FsError> {
         if get_bytes(bytes, AT_MAGIC) != MAGIC {
             return Err(FsError::NotFormatted);
         }
@@ -146,7 +179,7 @@ impl Superblock {
     }
 
     /// Převede superblok na bajty pro zápis na začátek disku
-    pub fn to_bytes(&self) -> [u8; SUPERBLOCK_SIZE] {
+    fn to_bytes(&self) -> [u8; SUPERBLOCK_SIZE] {
         let mut bytes = [0u8; SUPERBLOCK_SIZE];
 
         put_bytes(&mut bytes, AT_MAGIC, &MAGIC);
@@ -170,41 +203,4 @@ impl fmt::Display for Superblock {
             self.disk_size, self.cluster_count, self.cluster_size, self.fat_start, self.data_start
         )
     }
-}
-
-/// Chyba poškozeného superbloku s popisem problému
-fn corrupted(detail: impl ToString) -> FsError {
-    FsError::Corrupted(detail.to_string())
-}
-
-/// Zapíše bajty `value` na pozici `at`
-fn put_bytes(bytes: &mut [u8], at: usize, value: &[u8]) {
-    bytes[at..at + value.len()].copy_from_slice(value);
-}
-
-/// Přečte `N` bajtů z pozice `at` jako pole `[u8; N]`, `N` se odvodí z místa použití
-fn get_bytes<const N: usize>(bytes: &[u8], at: usize) -> [u8; N] {
-    let mut buf = [0u8; N];
-    buf.copy_from_slice(&bytes[at..at + N]);
-    buf
-}
-
-/// Zapíše `value` jako 4 bajty little-endian na pozici `at`
-fn put_u32(bytes: &mut [u8], at: usize, value: u32) {
-    put_bytes(bytes, at, &value.to_le_bytes());
-}
-
-/// Zapíše `value` jako 8 bajtů little-endian na pozici `at`
-fn put_u64(bytes: &mut [u8], at: usize, value: u64) {
-    put_bytes(bytes, at, &value.to_le_bytes());
-}
-
-/// Přečte 4 bajty little-endian z pozice `at`
-fn get_u32(bytes: &[u8], at: usize) -> u32 {
-    u32::from_le_bytes(get_bytes(bytes, at))
-}
-
-/// Přečte 8 bajtů little-endian z pozice `at`
-fn get_u64(bytes: &[u8], at: usize) -> u64 {
-    u64::from_le_bytes(get_bytes(bytes, at))
 }

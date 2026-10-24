@@ -24,6 +24,10 @@ pub enum FsError {
     NotFormatted,
     /// Na disku není dost volných clusterů
     DiskFull,
+    /// V adresáři není volný slot pro novou položku
+    DirFull,
+    /// Jméno nesplňuje formát 8.3, nese jméno a důvod
+    InvalidName(String),
     /// Data na disku si odporují, nese popis problému
     Corrupted(String),
     /// Chyba operačního systému při čtení nebo zápisu souboru se FS
@@ -40,6 +44,8 @@ impl fmt::Display for FsError {
             FsError::CannotCreateFile(reason) => write!(f, "CANNOT CREATE FILE ({reason})"),
             FsError::NotFormatted => write!(f, "NOT FORMATTED (use: format <size>MB)"),
             FsError::DiskFull => write!(f, "DISK FULL"),
+            FsError::DirFull => write!(f, "DIRECTORY FULL"),
+            FsError::InvalidName(detail) => write!(f, "INVALID NAME ({detail})"),
             FsError::Corrupted(detail) => write!(f, "CORRUPTED FILESYSTEM ({detail})"),
             FsError::Io(e) => write!(f, "IO ERROR ({e})"),
         }
@@ -51,4 +57,12 @@ impl From<io::Error> for FsError {
     fn from(e: io::Error) -> Self {
         FsError::Io(e)
     }
+}
+
+pub fn corrupted(detail: impl ToString) -> FsError {
+    FsError::Corrupted(detail.to_string())
+}
+
+pub fn cannot_create(reason: impl ToString) -> FsError {
+    FsError::CannotCreateFile(reason.to_string())
 }

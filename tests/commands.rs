@@ -259,37 +259,56 @@ fn truncated_fs_is_reported_as_corrupted(fs: TempFs) {
 }
 
 // ---------------------------------------------------------------------------
-// FAT
+// FAT a kořenový adresář (čtené přímo ze souboru)
 // ---------------------------------------------------------------------------
 
-/// Pozice polí superbloku, které testy čtou přímo ze souboru (viz superblock.rs)
+/// Pozice polí superbloku (viz superblock.rs)
+const SB_CLUSTER_SIZE: usize = 12;
 const SB_CLUSTER_COUNT: usize = 16;
+const SB_ROOT_CLUSTER: usize = 20;
 const SB_FAT_START: usize = 32;
+const SB_DATA_START: usize = 40;
 
 /// Hodnota položky EOF na disku (u32::MAX - 1, little-endian)
 const RAW_EOF: [u8; 4] = [0xFE, 0xFF, 0xFF, 0xFF];
 
-/// Počet clusterů a offset FAT přečtené ze superbloku v souboru
-fn fat_layout(bytes: &[u8]) -> (usize, usize) {
-    let count = u32::from_le_bytes(bytes[SB_CLUSTER_COUNT..SB_CLUSTER_COUNT + 4].try_into().unwrap());
-    let start = u64::from_le_bytes(bytes[SB_FAT_START..SB_FAT_START + 8].try_into().unwrap());
-    (count as usize, start as usize)
+/// Velikost položky adresáře a pozice jejích polí (viz dir.rs)
+const DIR_ENTRY_SIZE: usize = 32;
+const DE_KIND: usize = 12;
+const DE_SIZE: usize = 16;
+const DE_START: usize = 20;
+const KIND_DIR: u8 = 2;
+
+/// Číslo u32 (little-endian) na pozici `at`
+fn read_u32(bytes: &[u8], at: usize) -> usize {
+    u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize
 }
 
-/// Po formátu jsou všechny položky FAT volné (FREE = u32::MAX = FF FF FF FF)
+/// Číslo u64 (little-endian) na pozici `at`
+fn read_u64(bytes: &[u8], at: usize) -> usize {
+    u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap()) as usize
+}
+
+/// Po formátu je obsazený jen cluster kořenového adresáře (EOF), ostatní jsou volné
+/// (FREE = u32::MAX = FF FF FF FF)
 #[rstest]
 #[case::one_mb(1)]
 #[case::ten_mb(10)]
-fn format_marks_all_clusters_free(fs: TempFs, #[case] megabytes: u64) {
+fn format_fat_contains_only_root(fs: TempFs, #[case] megabytes: u64) {
     fs.run(&format!("format {megabytes}MB\nexit\n"));
 
     let bytes = std::fs::read(&fs.path).unwrap();
-    let (count, start) = fat_layout(&bytes);
-    let fat = &bytes[start..start + count * 4];
+    let count = read_u32(&bytes, SB_CLUSTER_COUNT);
+    let root = read_u32(&bytes, SB_ROOT_CLUSTER);
+    let fat = &bytes[read_u64(&bytes, SB_FAT_START)..][..count * 4];
 
-    // TODO krok 4: kořenový adresář bude mít cluster 0 označený EOF
-    assert!(count > 0);
-    assert!(fat.iter().all(|&b| b == 0xFF), "FAT must contain only FREE entries");
+    for (cluster, entry) in fat.chunks(4).enumerate() {
+        if cluster == root {
+            assert_eq!(entry, RAW_EOF, "root cluster {cluster} must be EOF");
+        } else {
+            assert_eq!(entry, [0xFF; 4], "cluster {cluster} must be FREE");
+        }
+    }
 }
 
 /// Při startu se FAT načte ze souboru: ručně obsazené položky ubydou z volných
@@ -301,15 +320,44 @@ fn fat_is_read_from_disk(fs: TempFs, #[case] used: usize) {
     fs.run("format 1MB\nexit\n");
 
     let mut bytes = std::fs::read(&fs.path).unwrap();
-    let (count, start) = fat_layout(&bytes);
-    for i in 0..used {
-        let at = start + i * 4;
+    let count = read_u32(&bytes, SB_CLUSTER_COUNT);
+    let start = read_u64(&bytes, SB_FAT_START);
+    // Cluster 0 je kořen, obsazujeme až clustery za ním
+    for cluster in 1..=used {
+        let at = start + cluster * 4;
         bytes[at..at + 4].copy_from_slice(&RAW_EOF);
     }
     std::fs::write(&fs.path, &bytes).unwrap();
 
     let output = fs.run("exit\n");
 
-    let free = count - used;
+    let free = count - 1 - used;
     assert_contains(&String::from_utf8_lossy(&output.stderr), &[&format!("{free} free")]);
+}
+
+/// Kořenový adresář obsahuje jen "." a "..", obě ukazují na kořen; zbytek clusteru je prázdný
+#[rstest]
+fn format_creates_root_directory(fs: TempFs) {
+    fs.run("format 1MB\nexit\n");
+
+    let bytes = std::fs::read(&fs.path).unwrap();
+    let cluster_size = read_u32(&bytes, SB_CLUSTER_SIZE);
+    let root = read_u32(&bytes, SB_ROOT_CLUSTER);
+    let offset = read_u64(&bytes, SB_DATA_START) + root * cluster_size;
+    let cluster = &bytes[offset..offset + cluster_size];
+
+    for (slot, name) in [
+        (0, &b".\0\0\0\0\0\0\0\0\0\0\0"[..]),
+        (1, &b"..\0\0\0\0\0\0\0\0\0\0"[..]),
+    ] {
+        let entry = &cluster[slot * DIR_ENTRY_SIZE..][..DIR_ENTRY_SIZE];
+        assert_eq!(&entry[..12], name, "slot {slot}: name");
+        assert_eq!(entry[DE_KIND], KIND_DIR, "slot {slot}: kind");
+        assert_eq!(read_u32(entry, DE_SIZE), 0, "slot {slot}: size");
+        assert_eq!(read_u32(entry, DE_START), root, "slot {slot}: start");
+    }
+    assert!(
+        cluster[2 * DIR_ENTRY_SIZE..].iter().all(|&b| b == 0),
+        "other slots must be free"
+    );
 }

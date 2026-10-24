@@ -3,7 +3,7 @@
 use std::io;
 
 use super::disk::Disk;
-use crate::error::FsError;
+use crate::error::{FsError, corrupted};
 
 /// Velikost jedné položky FAT na disku v bajtech (`u32`)
 pub const FAT_INDEX_SIZE: u64 = 4;
@@ -109,12 +109,13 @@ impl FAT {
     }
 
     /// Projde řetězec od `first` a vrátí čísla jeho clusterů v pořadí
+    /// <br> **POZOR**: musím předat jakoby "uměle" odkaz na `first`, tedy `FATEntry::Next(first)`, jinak by mi
+    /// vypadnul první cluster.
     pub fn chain(&self, first: FATEntry) -> Result<Vec<u32>, FsError> {
         let mut clusters = Vec::new();
         let mut current = first;
 
         loop {
-            // Error když: číslo clusteru, položka FREE nebo BAD uvnitř řetězce, cyklus (nejvýš `cluster_count` clusterů)
             let cluster = match current {
                 FATEntry::EOF => return Ok(clusters),
                 FATEntry::Next(cluster) => cluster,
@@ -122,7 +123,6 @@ impl FAT {
                 FATEntry::BAD => return Err(corrupted("chain contains a BAD entry")),
             };
 
-            // Další cluster by byl už (cluster_count + 1). – některý se musí opakovat
             if clusters.len() >= self.entries.len() {
                 return Err(corrupted("cycle in chain"));
             }
@@ -174,7 +174,7 @@ impl FAT {
         Ok(())
     }
 
-    /// Zapíše na disk položky všech clusterů ze seznamu
+    /// Zapíše na disk položky všech clusterů ze seznamu (mírna optimalizační abstrakce nad self.save_range)
     fn save_clusters(&self, disk: &mut Disk, clusters: &[u32]) -> io::Result<()> {
         // Místo zápisu po jedné položce se zapíše souvislý úsek od nejnižšího po nejvyšší
         // cluster jedním voláním – položky mezi nimi se přepíšou stejnou hodnotou, jakou už
@@ -183,6 +183,7 @@ impl FAT {
             return Ok(()); // prázdný seznam, není co zapisovat
         };
 
+        // Range zde pokrývá soubory, které dostanou zapsanou stejnou hodnotu (protože jsou v range)
         self.save_range(disk, first as usize, last as usize)
     }
 
@@ -193,9 +194,4 @@ impl FAT {
 
         disk.write_at(self.start + (first as u64) * FAT_INDEX_SIZE, &bytes)
     }
-}
-
-/// Chyba poškozeného řetězce s popisem problému
-fn corrupted(detail: impl ToString) -> FsError {
-    FsError::Corrupted(detail.to_string())
 }
