@@ -5,6 +5,14 @@ use super::dir::{Dir, DirEntry, EntryKind, Name};
 use super::fat::FATEntry;
 use crate::error::{FsError, corrupted};
 
+/// Existující položka, na kterou vede cesta
+pub(super) enum Node {
+    /// Soubor a adresář, ve kterém leží
+    File { parent: Dir, entry: DirEntry },
+    /// Adresář (číslo jeho clusteru)
+    Dir(u32),
+}
+
 impl FileSystem {
     /// Načte adresář z `cluster`
     pub(super) fn load_dir(&mut self, cluster: u32) -> Result<Dir, FsError> {
@@ -45,6 +53,45 @@ impl FileSystem {
         }
 
         Ok((dir, name))
+    }
+
+    /// Existující soubor nebo adresář na cestě `path` (zdroj příkazu)
+    ///
+    /// Když nic takového neexistuje, vrátí [`FsError::FileNotFound`] – i když chybí už některý
+    /// adresář po cestě: pro zdroj ze zadání platí jen „FILE NOT FOUND (není zdroj)“
+    pub(super) fn resolve_node(&mut self, path: &str) -> Result<Node, FsError> {
+        let (cluster, last) = self.walk(path).map_err(|e| match e {
+            FsError::PathNotFound => FsError::FileNotFound,
+            other => other,
+        })?;
+
+        // `/`, `.`, `..` na konci vedou vždy na adresář
+        let Some(name) = last else {
+            return Ok(Node::Dir(cluster));
+        };
+        let Ok(name) = Name::parse(name) else {
+            return Err(FsError::FileNotFound);
+        };
+
+        let parent = self.load_dir(cluster)?;
+        let Some(entry) = parent.find(&name).cloned() else {
+            return Err(FsError::FileNotFound);
+        };
+
+        match entry.kind {
+            EntryKind::File => Ok(Node::File { parent, entry }),
+            EntryKind::Dir => Ok(Node::Dir(dir_cluster(&entry)?)),
+        }
+    }
+
+    /// Existující soubor na cestě `path` a adresář, ve kterém leží
+    ///
+    /// Neexistuje nebo je to adresář → [`FsError::FileNotFound`]
+    pub(super) fn resolve_file(&mut self, path: &str) -> Result<(Dir, DirEntry), FsError> {
+        match self.resolve_node(path)? {
+            Node::File { parent, entry } => Ok((parent, entry)),
+            Node::Dir(_) => Err(FsError::FileNotFound),
+        }
     }
 
     /// Absolutní cesta k adresáři `cluster`, např. `/a/b`
@@ -126,7 +173,7 @@ impl FileSystem {
     }
 
     /// Cluster rodiče adresáře `cluster` (podle jeho položky `..`)
-    fn parent_of(&mut self, cluster: u32) -> Result<u32, FsError> {
+    pub(super) fn parent_of(&mut self, cluster: u32) -> Result<u32, FsError> {
         let dir = self.load_dir(cluster)?;
 
         match dir.find(&Name::DOTDOT) {

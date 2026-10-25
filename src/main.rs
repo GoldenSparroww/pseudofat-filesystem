@@ -10,11 +10,11 @@
 mod config;
 mod error;
 mod filesystem;
+mod host;
 mod shell;
 
 use std::env;
 use std::ffi::OsString;
-use std::path::PathBuf;
 use std::process::ExitCode;
 
 use shell::Shell;
@@ -30,7 +30,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let mut shell = Shell::new(PathBuf::from(fs_path));
+    let mut shell = Shell::new(host::host_path(fs_path));
     shell.run();
 
     ExitCode::SUCCESS

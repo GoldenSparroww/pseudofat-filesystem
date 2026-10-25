@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use crate::config::FORMAT_UNIT;
 use crate::error::FsError;
 use crate::filesystem::FileSystem;
+use crate::host::{self, host_path};
 
 /// Syntakticky správný příkaz včetně parametrů
 #[derive(Debug)]
@@ -163,6 +164,8 @@ enum Output {
     Ok,
     /// Vypíše řádky textu (výsledek ls, pwd, …)
     Lines(Vec<String>),
+    /// Vypíše text tak, jak je (obsah souboru u cat)
+    RawText(String),
 }
 
 /// Stav běžícího shellu
@@ -266,7 +269,14 @@ impl Shell {
                     println!("{line}");
                 }
             }
-            // Sémantické chyby jsou odpovědí na příkaz stejně jako OK – patří na stdout
+            Ok(Output::RawText(text)) => {
+                print!("{text}");
+                // Bez odřádkování na konci by se obsah slil s výstupem dalšího příkazu
+                if !text.is_empty() && !text.ends_with('\n') {
+                    println!();
+                }
+            }
+            // Sémantické chyby jsou stderr
             Err(e) => println!("{e}"),
         }
 
@@ -288,6 +298,21 @@ impl Shell {
             Command::Cd { path } => fs.cd(&path).map(|()| Output::Ok),
             Command::Pwd => fs.pwd().map(|path| Output::Lines(vec![path])),
             Command::Ls { path } => fs.ls(path.as_deref()).map(Output::Lines),
+            Command::Cat { path } => {
+                // Obsah nemusí být platné UTF-8. Konzole na Windows neplatné UTF-8 vypsat
+                // odmítne, proto lossy (přesné bajty dostane uživatel přes outcp)
+                let data = fs.read_file(&path)?;
+                Ok(Output::RawText(String::from_utf8_lossy(&data).into_owned()))
+            }
+            Command::Info { path } => fs.info(&path).map(Output::Lines),
+            Command::Incp { host_src, dst } => {
+                let data = host::read_file(&host_path(&host_src))?;
+                fs.create_file(&dst, &data).map(|()| Output::Ok)
+            }
+            Command::Outcp { src, host_dst } => {
+                let data = fs.read_file(&src)?;
+                host::write_file(&host_path(&host_dst), &data).map(|()| Output::Ok)
+            }
             _ => Ok(Output::Lines(vec!["NOT IMPLEMENTED".to_string()])),
         }
     }

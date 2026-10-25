@@ -128,6 +128,16 @@ impl DirEntry {
         }
     }
 
+    /// Položka souboru o velikosti `size` s řetězcem od `start` (`EOF` = prázdný soubor)
+    pub fn file(name: Name, size: u32, start: FATEntry) -> DirEntry {
+        DirEntry {
+            name,
+            kind: EntryKind::File,
+            size,
+            start,
+        }
+    }
+
     /// Převede položku na 32 bajtů slotu
     fn to_bytes(&self) -> [u8; DIR_ENTRY_SIZE] {
         let mut bytes = [0u8; DIR_ENTRY_SIZE];

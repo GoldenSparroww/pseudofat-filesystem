@@ -7,6 +7,7 @@ mod dir;
 mod dir_ops;
 mod disk;
 mod fat;
+mod file_ops;
 mod path;
 mod superblock;
 

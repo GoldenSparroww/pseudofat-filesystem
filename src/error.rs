@@ -30,7 +30,7 @@ pub enum FsError {
     InvalidName(String),
     /// Data na disku si odporují, nese popis problému
     Corrupted(String),
-    /// Chyba operačního systému při čtení nebo zápisu souboru se FS
+    /// Chyba operačního systému při čtení nebo zápisu souboru se FS nebo souboru na hostiteli
     Io(io::Error),
 }
 

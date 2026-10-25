@@ -75,6 +75,45 @@ fn fs() -> TempFs {
     TempFs::new()
 }
 
+/// Dočasná složka na hostiteli se soubory pro incp a outcp, po testu se smaže i s obsahem
+struct HostDir {
+    path: PathBuf,
+}
+
+impl HostDir {
+    fn new() -> Self {
+        static NEXT_ID: AtomicU32 = AtomicU32::new(0);
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+
+        let dir = format!("pseudofat-host-{}-{id}", std::process::id());
+        let path = std::env::temp_dir().join(dir);
+        std::fs::create_dir_all(&path).expect("cannot create host dir");
+        HostDir { path }
+    }
+
+    /// Vytvoří soubor `name` s obsahem `content` a vrátí jeho cestu pro příkazy
+    fn file(&self, name: &str, content: &[u8]) -> String {
+        std::fs::write(self.path.join(name), content).expect("cannot create host file");
+        self.join(name)
+    }
+
+    /// Cesta k `name` v této složce jako text pro příkazy (soubor nemusí existovat)
+    fn join(&self, name: &str) -> String {
+        self.path.join(name).to_str().expect("temp path is not UTF-8").to_string()
+    }
+}
+
+impl Drop for HostDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+#[fixture]
+fn host() -> HostDir {
+    HostDir::new()
+}
+
 /// Řádky standardního výstupu.
 fn lines(output: &Output) -> Vec<String> {
     String::from_utf8_lossy(&output.stdout).lines().map(str::to_string).collect()
@@ -300,6 +339,7 @@ const DIR_ENTRY_SIZE: usize = 32;
 const DE_KIND: usize = 12;
 const DE_SIZE: usize = 16;
 const DE_START: usize = 20;
+const KIND_FILE: u8 = 1;
 const KIND_DIR: u8 = 2;
 
 /// Číslo u32 (little-endian) na pozici `at`
@@ -310,6 +350,12 @@ fn read_u32(bytes: &[u8], at: usize) -> usize {
 /// Číslo u64 (little-endian) na pozici `at`
 fn read_u64(bytes: &[u8], at: usize) -> usize {
     u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap()) as usize
+}
+
+/// Při dalším spuštění hlásí program na stderr právě `free` volných clusterů
+fn assert_free(fs: &TempFs, free: usize) {
+    let output = fs.run("exit\n");
+    assert_contains(&String::from_utf8_lossy(&output.stderr), &[&format!(", {free} free)")]);
 }
 
 /// Po formátu je obsazený jen cluster kořenového adresáře (EOF), ostatní jsou volné
@@ -352,10 +398,7 @@ fn fat_is_read_from_disk(fs: TempFs, #[case] used: usize) {
     }
     std::fs::write(&fs.path, &bytes).unwrap();
 
-    let output = fs.run("exit\n");
-
-    let free = count - 1 - used;
-    assert_contains(&String::from_utf8_lossy(&output.stderr), &[&format!(", {free} free)")]);
+    assert_free(&fs, count - 1 - used);
 }
 
 /// Kořenový adresář obsahuje jen "." a "..", obě ukazují na kořen; zbytek clusteru je prázdný
@@ -450,10 +493,7 @@ fn mkdir_uses_one_cluster(fs: TempFs, #[case] commands: &str, #[case] dirs: usiz
     fs.run(&format!("format 1MB\n{commands}\nexit\n"));
     let count = read_u32(&std::fs::read(&fs.path).unwrap(), SB_CLUSTER_COUNT);
 
-    let output = fs.run("exit\n");
-
-    let free = count - 1 - dirs;
-    assert_contains(&String::from_utf8_lossy(&output.stderr), &[&format!(", {free} free)")]);
+    assert_free(&fs, count - 1 - dirs);
 }
 
 /// Adresář zabírá jeden cluster: vejde se do něj `cluster_size / 32` položek, dvě z nich jsou
@@ -476,7 +516,210 @@ fn directory_full(fs: TempFs) {
     );
     assert_contains(&out[capacity], &["DIRECTORY FULL"]);
 
-    let output = fs.run("exit\n");
-    let free = count - 1 - capacity;
-    assert_contains(&String::from_utf8_lossy(&output.stderr), &[&format!(", {free} free)")]);
+    assert_free(&fs, count - 1 - capacity);
+}
+
+// ---------------------------------------------------------------------------
+// Soubory: incp, cat, outcp, info
+// ---------------------------------------------------------------------------
+
+/// Obsah textového souboru `t.txt` v [`files`]
+const HOST_TEXT: &[u8] = b"hello\nworld\n";
+
+/// Binární obsah se všemi hodnotami bajtů (7 a 256 jsou nesoudělná)
+fn binary(size: usize) -> Vec<u8> {
+    (0..size).map(|i| (i * 7 % 256) as u8).collect()
+}
+
+/// Příkazy nad čerstvým FS a jejich výstup. `{h}` je složka na hostiteli se soubory
+/// `t.txt` (dva řádky), `n.txt` (`abc` bez odřádkování) a `e.txt` (prázdný)
+#[rstest]
+// incp a cat
+#[case::cat_text("incp {h}/t.txt f\ncat f", &["OK", "hello", "world"])]
+#[case::cat_without_final_newline("incp {h}/n.txt f\ncat f\npwd", &["OK", "abc", "/"])]
+#[case::cat_empty("incp {h}/e.txt f\ncat f\npwd", &["OK", "/"])]
+#[case::ls_shows_files("incp {h}/t.txt f.txt\nmkdir d\nls", &["OK", "OK", "FILE: f.txt", "DIR: d"])]
+#[case::paths(
+    "mkdir a\ncd a\nincp {h}/n.txt f\nincp {h}/n.txt ../g\ncd /\ncat a/f\ncat /a/./f\ncat g",
+    &["OK", "OK", "OK", "OK", "OK", "abc", "abc", "abc"]
+)]
+// Chyby incp
+#[case::incp_missing_source("incp {h}/nope f\nincp {h}/nope/x f\nls", &["FILE NOT FOUND"; 2])]
+#[case::incp_source_is_dir("incp {h} f\nls", &["FILE NOT FOUND"])]
+#[case::incp_missing_target_dir("incp {h}/t.txt x/f", &["PATH NOT FOUND"])]
+#[case::incp_target_through_file("incp {h}/t.txt f\nincp {h}/t.txt f/g", &["OK", "PATH NOT FOUND"])]
+#[case::incp_exists("incp {h}/t.txt f\nincp {h}/n.txt f\ncat f", &["OK", "EXIST", "hello", "world"])]
+#[case::incp_onto_dir("mkdir d\nincp {h}/t.txt d\nincp {h}/t.txt .", &["OK", "EXIST", "EXIST"])]
+#[case::incp_invalid_name("incp {h}/t.txt abcdefghi.txt\nls", &["INVALID NAME"])]
+// Chyby cat a info
+#[case::cat_missing("cat f\ncat a/f\ncat /", &["FILE NOT FOUND"; 3])]
+#[case::cat_dir("mkdir d\ncat d", &["OK", "FILE NOT FOUND"])]
+#[case::cat_through_file("incp {h}/t.txt f\ncat f/g", &["OK", "FILE NOT FOUND"])]
+#[case::info_missing("info f\ninfo a/f", &["FILE NOT FOUND"; 2])]
+// Soubor tam, kde se čeká adresář
+#[case::cd_ls_on_file("incp {h}/t.txt f\ncd f\nls f\npwd", &["OK", "PATH NOT FOUND", "PATH NOT FOUND", "/"])]
+#[case::mkdir_over_file("incp {h}/t.txt f\nmkdir f\nmkdir f/x", &["OK", "EXIST", "PATH NOT FOUND"])]
+// Chyby outcp
+#[case::outcp_missing_source("outcp f {h}/out\noutcp a/f {h}/out", &["FILE NOT FOUND"; 2])]
+#[case::outcp_dir("mkdir d\noutcp d {h}/out", &["OK", "FILE NOT FOUND"])]
+#[case::outcp_missing_host_dir("incp {h}/t.txt f\noutcp f {h}/nope/out", &["OK", "PATH NOT FOUND"])]
+#[case::outcp_host_exists("incp {h}/t.txt f\noutcp f {h}/n.txt\noutcp f {h}", &["OK", "EXIST", "EXIST"])]
+fn files(fs: TempFs, host: HostDir, #[case] commands: &str, #[case] expected: &[&str]) {
+    host.file("t.txt", HOST_TEXT);
+    host.file("n.txt", b"abc");
+    host.file("e.txt", b"");
+
+    let commands = commands.replace("{h}", &host.path.display().to_string());
+    assert_lines(&fs.run_formatted(&commands), expected);
+}
+
+/// Soubor projde incp → outcp beze změny, i přes hranice clusterů (cluster = 1024 B)
+#[rstest]
+fn incp_outcp_roundtrip(fs: TempFs, host: HostDir, #[values(0, 1, 1023, 1024, 1025, 5000, 100_000)] size: usize) {
+    let content = binary(size);
+    let src = host.file("in", &content);
+    let dst = host.join("out");
+
+    assert_eq!(fs.run_formatted(&format!("incp {src} f\noutcp f {dst}")), ["OK", "OK"]);
+    assert_eq!(std::fs::read(&dst).unwrap(), content);
+}
+
+/// Soubory zůstanou po restartu
+#[rstest]
+fn files_survive_restart(fs: TempFs, host: HostDir) {
+    let content = binary(5000);
+    let src = host.file("in", &content);
+    let dst = host.join("out");
+    fs.run(&format!("format 1MB\nmkdir a\nincp {src} a/f\nexit\n"));
+
+    let output = fs.run(&format!("ls a\noutcp a/f {dst}\nexit\n"));
+
+    assert_eq!(lines(&output), ["FILE: f", "OK"]);
+    assert_eq!(std::fs::read(&dst).unwrap(), content);
+}
+
+/// outcp nepřepíše existující soubor na hostiteli
+#[rstest]
+fn outcp_keeps_existing_host_file(fs: TempFs, host: HostDir) {
+    let src = host.file("in", b"new");
+    let dst = host.file("out", b"old");
+
+    let out = fs.run_formatted(&format!("incp {src} f\noutcp f {dst}"));
+
+    assert_lines(&out, &["OK", "EXIST"]);
+    assert_eq!(std::fs::read(&dst).unwrap(), b"old");
+}
+
+/// Soubor zabere ⌈velikost / 1024⌉ clusterů, prázdný žádný
+#[rstest]
+#[case::empty(0, 0)]
+#[case::one_byte(1, 1)]
+#[case::exactly_one_cluster(1024, 1)]
+#[case::one_byte_over(1025, 2)]
+#[case::five(5000, 5)]
+fn incp_uses_clusters(fs: TempFs, host: HostDir, #[case] size: usize, #[case] clusters: usize) {
+    let src = host.file("in", &binary(size));
+    fs.run(&format!("format 1MB\nincp {src} f\nexit\n"));
+    let count = read_u32(&std::fs::read(&fs.path).unwrap(), SB_CLUSTER_COUNT);
+
+    assert_free(&fs, count - 1 - clusters);
+}
+
+/// Soubor větší než volné místo se odmítne a nic nezabere; soubor přesně na volné místo se
+/// vejde, pak už jen prázdný soubor (ten žádný cluster nepotřebuje)
+#[rstest]
+fn incp_disk_full(fs: TempFs, host: HostDir) {
+    fs.run("format 1MB\nexit\n");
+    let bytes = std::fs::read(&fs.path).unwrap();
+    let free = read_u32(&bytes, SB_CLUSTER_COUNT) - 1;
+    let capacity = free * read_u32(&bytes, SB_CLUSTER_SIZE);
+
+    let too_big = host.file("big", &binary(capacity + 1));
+    let exact = host.file("exact", &binary(capacity));
+    let one = host.file("one", b"x");
+    let empty = host.file("empty", b"");
+
+    let output = fs.run(&format!(
+        "incp {too_big} a\nls\nincp {exact} b\nincp {one} c\nincp {empty} d\nls\nexit\n"
+    ));
+
+    assert_lines(
+        &lines(&output),
+        &["DISK FULL", "OK", "DISK FULL", "OK", "FILE: b", "FILE: d"],
+    );
+    assert_free(&fs, 0);
+}
+
+/// incp zapíše položku do prvního volného slotu, řetězec do FAT a data do clusterů
+#[rstest]
+fn incp_writes_entry_fat_and_data(fs: TempFs, host: HostDir) {
+    let content = binary(3000);
+    let src = host.file("in", &content);
+    fs.run(&format!("format 1MB\nincp {src} f.txt\nexit\n"));
+
+    let bytes = std::fs::read(&fs.path).unwrap();
+    let cluster_size = read_u32(&bytes, SB_CLUSTER_SIZE);
+    let root = read_u32(&bytes, SB_ROOT_CLUSTER);
+    let fat_start = read_u64(&bytes, SB_FAT_START);
+    let data_start = read_u64(&bytes, SB_DATA_START);
+
+    // Slot 2 kořene – hned za "." a ".."
+    let entry = &bytes[data_start + root * cluster_size + 2 * DIR_ENTRY_SIZE..][..DIR_ENTRY_SIZE];
+    assert_eq!(&entry[..12], b"f\0\0\0\0\0\0\0txt\0", "name");
+    assert_eq!(entry[DE_KIND], KIND_FILE, "kind");
+    assert_eq!(read_u32(entry, DE_SIZE), 3000, "size");
+    assert_eq!(read_u32(entry, DE_START), 1, "start");
+
+    // First-fit: první volné clustery za kořenem, řetězec 1 → 2 → 3 → EOF
+    let fat = |cluster: usize| &bytes[fat_start + cluster * 4..][..4];
+    assert_eq!(read_u32(fat(1), 0), 2, "FAT[1]");
+    assert_eq!(read_u32(fat(2), 0), 3, "FAT[2]");
+    assert_eq!(fat(3), RAW_EOF, "FAT[3]");
+
+    // Clustery 1..=3 leží za sebou, data jsou tedy v souboru se FS v jednom kuse
+    assert_eq!(&bytes[data_start + cluster_size..][..content.len()], content);
+}
+
+/// info: první řádek ve tvaru ze zadání (`setup` vypisuje na každý příkaz jeden řádek)
+#[rstest]
+#[case::file("incp {h}/big f", "f", "f – file – velikost: 3000B - 1,2,3")]
+#[case::file_in_subdir(
+    "mkdir a\nincp {h}/big a/f.txt",
+    "/a/f.txt",
+    "f.txt – file – velikost: 3000B - 2,3,4"
+)]
+#[case::small_file("incp {h}/small s", "s", "s – file – velikost: 5B - 1")]
+#[case::empty_file("incp {h}/empty e", "e", "e – file – velikost: 0B - (no clusters)")]
+#[case::dir("mkdir a", "a", "a – dir – cluster - 1")]
+#[case::root("mkdir a", "/", "/ – dir – cluster - 0")]
+#[case::dot("mkdir a\nmkdir a/b\ncd a/b", ".", "b – dir – cluster - 2")]
+#[case::dotdot("mkdir a\nmkdir a/b\ncd a/b", "..", "a – dir – cluster - 1")]
+fn info_first_line(fs: TempFs, host: HostDir, #[case] setup: &str, #[case] path: &str, #[case] expected: &str) {
+    host.file("big", &binary(3000));
+    host.file("small", b"12345");
+    host.file("empty", b"");
+    let setup = setup.replace("{h}", &host.path.display().to_string());
+
+    let out = fs.run_formatted(&format!("{setup}\ninfo {path}"));
+
+    let setup_lines = setup.lines().count();
+    assert!(
+        out[..setup_lines].iter().all(|line| line == "OK"),
+        "setup failed: {out:?}"
+    );
+    assert_eq!(out[setup_lines], expected);
+}
+
+/// info vypíše pod prvním řádkem i podrobnosti, mezi nimi absolutní cestu
+#[rstest]
+fn info_shows_details(fs: TempFs, host: HostDir) {
+    let src = host.file("in", &binary(3000));
+
+    let out = fs.run_formatted(&format!("mkdir a\ncd a\nincp {src} f\ninfo f"));
+
+    assert!(out.len() > 4, "expected detail lines: {out:?}");
+    assert!(
+        out[4..].iter().any(|line| line.contains("/a/f")),
+        "absolute path missing: {out:?}"
+    );
 }
