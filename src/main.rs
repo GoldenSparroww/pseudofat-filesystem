@@ -1,15 +1,17 @@
-//! pseudoFAT – zjednodušený souborový systém založený na FAT.
+//! pseudoFAT – simplified filesystem based on FAT.
 //!
-//! Celý souborový systém je uložen v jednom souboru na hostitelském disku.
-//! Program se spouští s jediným parametrem – cestou k tomuto souboru:
+//! Whole FS is saved on host as file. Program runs with one arg,
+//! path to this file.
 //!
-//! ```text
+//! ```sh
 //! pseudofat myfs.dat
 //! ```
 
+mod bytes;
+mod command;
 mod config;
-mod error;
 mod filesystem;
+mod helpers;
 mod host;
 mod shell;
 
@@ -20,17 +22,16 @@ use std::process::ExitCode;
 use shell::Shell;
 
 fn main() -> ExitCode {
-    // args_os místo args: cesta na hostiteli nemusí být platné UTF-8
-    // a args() by na takové cestě spadl.
+    // args_os: linux UTF-8, win UTF-16
     let args: Vec<OsString> = env::args_os().collect();
 
-    // Očekáváme přesně jeden parametr – soubor se souborovým systémem.
+    // Only one param
     let [_, fs_path] = args.as_slice() else {
         eprintln!("Usage: pseudofat <fs-file>");
         return ExitCode::FAILURE;
     };
 
-    let mut shell = Shell::new(host::host_path(fs_path));
+    let mut shell = Shell::new(host::parse_host_path(fs_path));
     shell.run();
 
     ExitCode::SUCCESS

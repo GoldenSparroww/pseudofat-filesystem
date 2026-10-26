@@ -1,89 +1,91 @@
-//! Souborový systém pseudoFAT
-//!
-//! [`FileSystem`] drží otevřený soubor („disk“), jeho rozložení a FAT.
+//! Filesystem pseudoFAT
 
-mod bytes;
 mod dir;
-mod dir_ops;
 mod disk;
 mod fat;
-mod file_ops;
-mod path;
 mod superblock;
 
-use std::io;
 use std::path::Path;
+use std::{fmt, io};
 
-use self::dir::Dir;
-use self::disk::Disk;
-use self::fat::{FAT, FATEntry};
-use self::superblock::Superblock;
 use crate::config::CLUSTER_SIZE;
-use crate::error::{FsError, cannot_create};
+use crate::filesystem::dir::Dir;
+use crate::filesystem::disk::Disk;
+use crate::filesystem::fat::{FAT, FATPtrEntry};
+use crate::filesystem::superblock::Superblock;
 
-/// Otevřený souborový systém
+#[derive(Debug)]
 pub struct FileSystem {
-    /// Soubor se souborovým systémem
     disk: Disk,
-    /// Rozložení disku
-    sb: Superblock,
-    /// FAT v paměti, změny se hned zapisují i na disk
+    superblock: Superblock,
     fat: FAT,
-    /// Cluster aktuálního adresáře – jen stav běžícího programu, na disk se neukládá
     cwd: u32,
 }
 
-impl FileSystem {
-    /// Naformátuje soubor `path` na prázdný FS o velikosti `size` bajtů
-    /// Původní obsah souboru se zahodí, neexistující soubor se vytvoří
-    pub fn format(path: &Path, size: u64) -> Result<FileSystem, FsError> {
-        // Rozložení spočítáme dřív, než na soubor sáhneme: při nesmyslné
-        // velikosti tak původní obsah souboru zůstane nedotčený
-        let sb = Superblock::new(size, CLUSTER_SIZE).map_err(cannot_create)?;
+#[derive(Debug)]
+pub enum FsError {
+    NotFormatted,
+    DiskIo(io::Error),
+    Corrupted(String),
+    SuperblockCannotCreate(String),
+}
 
-        let mut disk = Disk::create(path, size).map_err(cannot_create)?;
-        sb.save(&mut disk).map_err(cannot_create)?;
-
-        // Nový soubor obsahuje samé nuly a 0 by znamenala Next(0), ne FREE –
-        // FAT je proto potřeba výslovně vyplnit (tj. FAT::new_free)
-        let mut fat = FAT::new_free(sb.fat_start, sb.cluster_count);
-        fat.save_all(&mut disk).map_err(cannot_create)?;
-
-        // Kořenový adresář: zabere cluster určený superblokem (jako každý adresář právě jeden,
-        // proto hned EOF), jeho ".." ukazuje na něj samotného
-        fat.set(&mut disk, sb.root_cluster, FATEntry::EOF).map_err(cannot_create)?;
-        Dir::init(&mut disk, &sb, sb.root_cluster, sb.root_cluster).map_err(cannot_create)?;
-
-        let cwd = sb.root_cluster;
-        Ok(FileSystem { disk, sb, fat, cwd })
+impl From<io::Error> for FsError {
+    fn from(e: io::Error) -> Self {
+        FsError::DiskIo(e)
     }
+}
 
-    /// Otevře existující FS ze souboru `path`
-    pub fn open(path: &Path) -> Result<FileSystem, FsError> {
+impl fmt::Display for FsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FsError::NotFormatted => write!(f, "Disk is not formatted."),
+            FsError::DiskIo(e) => write!(f, "Disk I/O error: {e}"),
+            FsError::Corrupted(msg) => write!(f, "Filesystem corrupted: {msg}"),
+            FsError::SuperblockCannotCreate(msg) => write!(f, "Cannot create superblock: {msg}"),
+        }
+    }
+}
+
+impl FileSystem {
+    pub fn try_open(path: &Path) -> Result<FileSystem, FsError> {
         let mut disk = match Disk::open(path) {
             Ok(disk) => disk,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(FsError::NotFormatted),
-            // Ostatní je FsError::Io
             Err(e) => return Err(e.into()),
         };
 
-        let sb = Superblock::load(&mut disk)?;
+        let superblock = Superblock::load(&mut disk)?;
 
-        // Superblok je ověřený, FAT tedy leží celá uvnitř souboru
-        let fat = FAT::load(&mut disk, sb.fat_start, sb.cluster_count)?;
+        let fat = FAT::load(&mut disk, superblock.fat_start, superblock.cluster_count)?;
 
-        // Po spuštění programu je aktuálním adresářem vždy kořen
-        let cwd = sb.root_cluster;
-        Ok(FileSystem { disk, sb, fat, cwd })
+        let cwd = superblock.root_cluster;
+
+        Ok(FileSystem { disk, superblock, fat, cwd })
     }
 
-    /// Rozložení disku
-    pub fn superblock(&self) -> &Superblock {
-        &self.sb
+    pub fn try_format(path: &Path, size: u64) -> Result<FileSystem, FsError> {
+        let mut disk = Disk::create(path, size)?;
+
+        let superblock = Superblock::new(size, CLUSTER_SIZE)?;
+        superblock.save(&mut disk)?;
+
+        let mut fat = FAT::new(superblock.fat_start, superblock.cluster_count);
+        fat.save(&mut disk)?;
+
+        // Directories have FATPtrEntry::EOF in FAT and no size (zero / one cluster)
+        fat.set(&mut disk, superblock.root_cluster, FATPtrEntry::EOF)?;
+        Dir::create_dir(&mut disk, &superblock, superblock.root_cluster, superblock.root_cluster)?;
+        let cwd = superblock.root_cluster;
+
+        Ok(FileSystem { disk, superblock, fat, cwd })
     }
 
-    /// Počet volných clusterů
-    pub fn free_clusters(&self) -> u32 {
-        self.fat.free_count()
+    pub fn info_superblock(&self) -> String {
+        self.superblock.to_string()
+    }
+
+    pub fn info_fat(&self) -> String {
+        self.fat.to_string()
     }
 }

@@ -1,37 +1,20 @@
-//! Superblok – popis rozložení FS, uložený na začátku souboru
+//! Superblock
+//!
+//! Also called Volume Boot Record (VBR), Boot Sector, BIOS Parameter Block (BPB)
 
 use std::fmt;
-use std::io;
 
-use super::bytes::{get_bytes, get_u32, get_u64, put_bytes, put_u32, put_u64};
-use super::disk::Disk;
-use super::fat;
-use crate::config::{CLUSTER_SIZE, FORMAT_UNIT, MAX_DISK_SIZE};
-use crate::error::FsError;
-use crate::error::corrupted;
+use crate::{
+    bytes,
+    config::{MAX_DISK_SIZE, MIB, MIN_CLUSTER_SIZE},
+    filesystem::{
+        FsError::{self, Corrupted, SuperblockCannotCreate},
+        disk::Disk,
+        fat,
+    },
+};
 
-/// Velikost oblasti vyhrazené pro superblok
 pub const SUPERBLOCK_SIZE: usize = 64;
-
-/// Identifikace našeho FS – prvních 8 bajtů souboru
-const MAGIC: [u8; 8] = *b"PSEUDFAT";
-
-/// Verze formátu na disku, zvýšit při každé nekompatibilní změně
-const VERSION: u32 = 1;
-
-/// Nejmenší povolená velikost clusteru
-const MIN_CLUSTER_SIZE: u32 = 512;
-
-// Kontrola konfigurace už při překladu: s příliš malým clusterem se program nepřeloží
-const _: () = assert!(CLUSTER_SIZE >= MIN_CLUSTER_SIZE, "CLUSTER_SIZE must be at least 512 B");
-
-// I největší disk s nejmenším clusterem musí jít adresovat čísly clusterů typu u32
-const _: () = assert!(
-    MAX_DISK_SIZE / (MIN_CLUSTER_SIZE as u64 + fat::FAT_INDEX_SIZE) <= fat::MAX_CLUSTER_COUNT as u64,
-    "MAX_DISK_SIZE is too large for u32 cluster numbers"
-);
-
-// Pozice polí
 const AT_MAGIC: usize = 0;
 const AT_VERSION: usize = 8;
 const AT_CLUSTER_SIZE: usize = 12;
@@ -40,72 +23,75 @@ const AT_ROOT_CLUSTER: usize = 20;
 const AT_DISK_SIZE: usize = 24;
 const AT_FAT_START: usize = 32;
 const AT_DATA_START: usize = 40;
+// Padding until 63
 
-/// Rozložení souborového systému na disku
+const MAGIC: [u8; 8] = *b"PSEUDFAT";
+const VERSION: u32 = 1;
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Superblock {
-    /// Velikost clusteru v bajtech
+    magic: String,
+    version: u32,
     pub cluster_size: u32,
-    /// Počet clusterů = počet položek FAT
     pub cluster_count: u32,
-    /// Cluster kořenového adresáře
     pub root_cluster: u32,
-    /// Celková velikost disku v bajtech
     pub disk_size: u64,
-    /// Offset začátku FAT
     pub fat_start: u64,
-    /// Offset clusteru 0
     pub data_start: u64,
 }
 
 impl Superblock {
-    /// Spočítá rozložení FS pro disk o velikosti `disk_size` bajtů
-    pub fn new(disk_size: u64, cluster_size: u32) -> Result<Superblock, String> {
+    pub fn new(disk_size: u64, cluster_size: u32) -> Result<Superblock, FsError> {
         if cluster_size < MIN_CLUSTER_SIZE {
-            return Err(format!(
+            return Err(SuperblockCannotCreate(format!(
                 "Cluster size too small (minimum allowed: {} B).",
                 MIN_CLUSTER_SIZE
-            ));
+            )));
         }
 
         if disk_size > MAX_DISK_SIZE {
-            return Err(format!(
+            return Err(SuperblockCannotCreate(format!(
                 "Disk too large (maximum allowed: {} MB).",
-                MAX_DISK_SIZE / FORMAT_UNIT
-            ));
+                MAX_DISK_SIZE / MIB
+            )));
         }
 
         if !cluster_size.is_power_of_two() {
-            return Err(format!("Cluster size must be a power of two ({cluster_size} B given)."));
+            return Err(SuperblockCannotCreate(format!(
+                "Cluster size should be a power of two ({cluster_size} B given)."
+            )));
         }
 
         let fat_start = SUPERBLOCK_SIZE as u64;
-        // e.g. cluster size + FAT index = 1024 + 4 = 1028
+
         let bytes_per_cluster = u64::from(cluster_size) + fat::FAT_INDEX_SIZE;
-        // saturating_sub: disk menší než superblok dá 0, místo aby odečítání podteklo
-        // Celočíselné dělení zbytek zahodí, pokud není přesné
+        // saturating_sub: disk_size - fat_start WILL BE >= 0; zero if disk is too small
         let count = disk_size.saturating_sub(fat_start) / bytes_per_cluster;
 
-        // Zde se ověřuje jestli dokáže náš FAT (u32) adresovat požadavoný počet clusterů
+        // Can our FAT address clusters we want?
         let cluster_count = match u32::try_from(count) {
-            // Pokud vstupní count = 0, u32::try_from(count) = 0 a tedy
-            // disk_size.saturating_sub(fat_start) = 0; což indikuje vstupní disk_size < fat_start
+            // Zero from previous step (count = ... / ...)
             Ok(0) => {
-                return Err(format!(
+                return Err(SuperblockCannotCreate(format!(
                     "Disk too small. Condition: Disk size >= Superblock + one FAT index + one cluster. ({} >= {} + {} + {})",
                     disk_size,
                     SUPERBLOCK_SIZE,
                     fat::FAT_INDEX_SIZE,
                     cluster_size
-                ));
+                )));
             }
-            // Nejen respektovat u32::try_from ale i naše omezení
+            // Not only respect u32::try_from but our stricter ones too
             Ok(n) if n <= fat::MAX_CLUSTER_COUNT => n,
-            // Jinak clustery nedokážeme do našich podmínek uložit
-            _ => return Err(format!("Disk too large. Icrease cluster size, or lower disk size.")),
+            _ => {
+                return Err(SuperblockCannotCreate(format!(
+                    "Disk too large. Icrease cluster size, or lower disk size."
+                )));
+            }
         };
 
         Ok(Superblock {
+            magic: String::from_utf8_lossy(&MAGIC).into_owned(),
+            version: VERSION,
             cluster_size,
             cluster_count,
             root_cluster: 0,
@@ -115,83 +101,75 @@ impl Superblock {
         })
     }
 
-    /// Načte a ověří superblok ze začátku disku
     pub fn load(disk: &mut Disk) -> Result<Superblock, FsError> {
-        let disk_size = disk.size()?;
+        let disk_size = disk.get_size()?;
 
-        // Tady jen hlídáme, že jde přečíst celý superblok
-        // Úplnou podmínku (superblok + jedna položka FAT + jeden cluster) Superblock::new
+        // Can I at least read superblock?
         if disk_size < SUPERBLOCK_SIZE as u64 {
             return Err(FsError::NotFormatted);
         }
 
         let mut bytes = [0u8; SUPERBLOCK_SIZE];
         disk.read_at(0, &mut bytes)?;
+
         Superblock::from_bytes(&bytes, disk_size)
     }
 
-    /// Zapíše superblok na začátek disku
-    pub fn save(&self, disk: &mut Disk) -> io::Result<()> {
+    pub fn save(&self, disk: &mut Disk) -> Result<(), FsError> {
         disk.write_at(0, &self.to_bytes())
     }
 
-    /// Offset clusteru `cluster` musí být platné číslo (menší než `cluster_count`)
-    pub fn cluster_offset(&self, cluster: u32) -> u64 {
-        self.data_start + u64::from(cluster) * u64::from(self.cluster_size)
-    }
-
-    /// Vrátí jen superblok, který popisuje platný FS
     fn from_bytes(bytes: &[u8; SUPERBLOCK_SIZE], disk_size: u64) -> Result<Superblock, FsError> {
-        if get_bytes(bytes, AT_MAGIC) != MAGIC {
+        if bytes::get_bytes_seq(bytes, AT_MAGIC) != MAGIC {
             return Err(FsError::NotFormatted);
         }
 
-        let version = get_u32(bytes, AT_VERSION);
-        if version != VERSION {
-            return Err(corrupted(format!("unsupported version {version}")));
+        if bytes::get_u32(bytes, AT_VERSION) != VERSION {
+            return Err(Corrupted(String::from("unsupported version")));
         }
 
-        let sb = Superblock {
-            cluster_size: get_u32(bytes, AT_CLUSTER_SIZE),
-            cluster_count: get_u32(bytes, AT_CLUSTER_COUNT),
-            root_cluster: get_u32(bytes, AT_ROOT_CLUSTER),
-            disk_size: get_u64(bytes, AT_DISK_SIZE),
-            fat_start: get_u64(bytes, AT_FAT_START),
-            data_start: get_u64(bytes, AT_DATA_START),
+        let superblock = Superblock {
+            magic: String::from_utf8_lossy(&MAGIC).into_owned(),
+            version: VERSION,
+            cluster_size: bytes::get_u32(bytes, AT_CLUSTER_SIZE),
+            cluster_count: bytes::get_u32(bytes, AT_CLUSTER_COUNT),
+            root_cluster: bytes::get_u32(bytes, AT_ROOT_CLUSTER),
+            disk_size: bytes::get_u64(bytes, AT_DISK_SIZE),
+            fat_start: bytes::get_u64(bytes, AT_FAT_START),
+            data_start: bytes::get_u64(bytes, AT_DATA_START),
         };
 
-        // Uložená velikost musí sedět se skutečnou délkou souboru...
-        if sb.disk_size != disk_size {
-            return Err(corrupted(format!(
-                "superblock says {} B, file has {disk_size} B",
-                sb.disk_size
-            )));
+        if superblock.disk_size != disk_size {
+            return Err(Corrupted(format!("superblock says {} B, file has {disk_size} B", superblock.disk_size)));
         }
 
-        // ...a zbytek musí přesně odpovídat rozložení, které by pro stejný disk
-        // a cluster spočítal format
-        let expected = Superblock::new(sb.disk_size, sb.cluster_size).map_err(corrupted)?;
-        if sb != expected {
-            return Err(corrupted("inconsistent layout"));
+        // rest must align perfecly under same conditions, when another is created with same values
+        let expected = Superblock::new(superblock.disk_size, superblock.cluster_size)?;
+        if superblock != expected {
+            return Err(Corrupted(String::from("inconsistent layout")));
         }
 
-        Ok(sb)
+        Ok(superblock)
     }
 
-    /// Převede superblok na bajty pro zápis na začátek disku
     fn to_bytes(&self) -> [u8; SUPERBLOCK_SIZE] {
         let mut bytes = [0u8; SUPERBLOCK_SIZE];
 
-        put_bytes(&mut bytes, AT_MAGIC, &MAGIC);
-        put_u32(&mut bytes, AT_VERSION, VERSION);
-        put_u32(&mut bytes, AT_CLUSTER_SIZE, self.cluster_size);
-        put_u32(&mut bytes, AT_CLUSTER_COUNT, self.cluster_count);
-        put_u32(&mut bytes, AT_ROOT_CLUSTER, self.root_cluster);
-        put_u64(&mut bytes, AT_DISK_SIZE, self.disk_size);
-        put_u64(&mut bytes, AT_FAT_START, self.fat_start);
-        put_u64(&mut bytes, AT_DATA_START, self.data_start);
+        bytes::put_bytes_seq(&mut bytes, AT_MAGIC, &MAGIC);
+        bytes::put_u32(&mut bytes, AT_VERSION, VERSION);
+        bytes::put_u32(&mut bytes, AT_CLUSTER_SIZE, self.cluster_size);
+        bytes::put_u32(&mut bytes, AT_CLUSTER_COUNT, self.cluster_count);
+        bytes::put_u32(&mut bytes, AT_ROOT_CLUSTER, self.root_cluster);
+        bytes::put_u64(&mut bytes, AT_DISK_SIZE, self.disk_size);
+        bytes::put_u64(&mut bytes, AT_FAT_START, self.fat_start);
+        bytes::put_u64(&mut bytes, AT_DATA_START, self.data_start);
 
         bytes
+    }
+
+    pub fn cluster_real_byte_offset(&self, cluster: u32) -> u64 {
+        // Don't forget, clusters are just terms within data; self.data_start + ...
+        self.data_start + u64::from(cluster) * u64::from(self.cluster_size)
     }
 }
 
@@ -199,7 +177,7 @@ impl fmt::Display for Superblock {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{} B, {} clusters x {} B, FAT at {}, data at {}",
+            "Disk size: {} B, {} clusters X {} B, FAT at {}, data at {}",
             self.disk_size, self.cluster_count, self.cluster_size, self.fat_start, self.data_start
         )
     }

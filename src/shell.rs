@@ -1,207 +1,48 @@
-//! Interaktivní shell.
+//! Interactive shell for managing pseudofat filesystem.
 
-use std::fmt;
 use std::io::{self, BufRead, IsTerminal, Write};
-use std::num::IntErrorKind;
 use std::path::PathBuf;
 
-use crate::config::FORMAT_UNIT;
-use crate::error::FsError;
-use crate::filesystem::FileSystem;
-use crate::host::{self, host_path};
+use crate::command::CommandExecError::{AlreadyHandled, NotImplemented};
+use crate::command::{Command, format::do_format};
+use crate::command::{CommandExecError, Output};
+use crate::filesystem::{FileSystem, FsError};
 
-/// Syntakticky správný příkaz včetně parametrů
-#[derive(Debug)]
-pub enum Command {
-    Cp { src: String, dst: String },
-    Mv { src: String, dst: String },
-    Rm { path: String },
-    Mkdir { path: String },
-    Rmdir { path: String },
-    Ls { path: Option<String> },
-    Cat { path: String },
-    Cd { path: String },
-    Pwd,
-    Info { path: String },
-    Incp { host_src: String, dst: String },
-    Outcp { src: String, host_dst: String },
-    Load { host_path: String },
-    Format { size_bytes: u64 },
-    Exit,
-    Check,
-    Bug { path: String },
-}
-
-/// Syntaxe všech příkazů
-const USAGE: &[(&str, &str)] = &[
-    ("cp", "cp <s1> <s2>"),
-    ("mv", "mv <s1> <s2>"),
-    ("rm", "rm <s1>"),
-    ("mkdir", "mkdir <a1>"),
-    ("rmdir", "rmdir <a1>"),
-    ("ls", "ls [a1]"),
-    ("cat", "cat <s1>"),
-    ("cd", "cd <a1>"),
-    ("pwd", "pwd"),
-    ("info", "info <s1|a1>"),
-    ("incp", "incp <host-s1> <s2>"),
-    ("outcp", "outcp <s1> <host-s2>"),
-    ("load", "load <host-s1>"),
-    ("format", "format <size>MB"),
-    ("exit", "exit"),
-    ("check", "check"),
-    ("bug", "bug <s1>"),
-];
-
-/// Syntaktická chyba
-#[derive(Debug)]
-pub enum ParseError {
-    /// Neznámý název příkazu
-    UnknownCommand(String),
-    /// Známý příkaz se špatným počtem parametrů, nese správnou syntaxi
-    WrongArguments(&'static str),
-    /// Parametr příkazu `format` není velikost ve tvaru `600MB`
-    InvalidSize(String),
-}
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ParseError::UnknownCommand(name) => write!(f, "UNKNOWN COMMAND ({name})"),
-            ParseError::WrongArguments(usage) => write!(f, "WRONG ARGUMENTS (usage: {usage})"),
-            ParseError::InvalidSize(text) => {
-                write!(f, "INVALID SIZE ({text}, expected e.g. 600MB)")
-            }
-        }
-    }
-}
-
-/// Převede jeden řádek na příkaz
-pub fn parse(line: &str) -> Result<Option<Command>, ParseError> {
-    // split_whitespace() automaticky řeší i `\n`, `\r\n` => konce řádků neřešim
-    let tokens: Vec<&str> = line.split_whitespace().collect();
-
-    let command = match tokens.as_slice() {
-        [] => return Ok(None),
-
-        ["cp", src, dst] => Command::Cp {
-            src: src.to_string(),
-            dst: dst.to_string(),
-        },
-        ["mv", src, dst] => Command::Mv {
-            src: src.to_string(),
-            dst: dst.to_string(),
-        },
-        ["rm", path] => Command::Rm { path: path.to_string() },
-        ["mkdir", path] => Command::Mkdir { path: path.to_string() },
-        ["rmdir", path] => Command::Rmdir { path: path.to_string() },
-        ["ls"] => Command::Ls { path: None },
-        ["ls", path] => Command::Ls {
-            path: Some(path.to_string()),
-        },
-        ["cat", path] => Command::Cat { path: path.to_string() },
-        ["cd", path] => Command::Cd { path: path.to_string() },
-        ["pwd"] => Command::Pwd,
-        ["info", path] => Command::Info { path: path.to_string() },
-        ["incp", host_src, dst] => Command::Incp {
-            host_src: host_src.to_string(),
-            dst: dst.to_string(),
-        },
-        ["outcp", src, host_dst] => Command::Outcp {
-            src: src.to_string(),
-            host_dst: host_dst.to_string(),
-        },
-        ["load", host_path] => Command::Load {
-            host_path: host_path.to_string(),
-        },
-        ["format", size] => Command::Format {
-            size_bytes: parse_size(size)?,
-        },
-        ["exit"] => Command::Exit,
-        ["check"] => Command::Check,
-        ["bug", path] => Command::Bug { path: path.to_string() },
-
-        // Nic nesedí: buď neznámý příkaz, nebo známý se špatným počtem parametrů
-        [name, ..] => return Err(unknown_or_wrong_arguments(name)),
-    };
-
-    Ok(Some(command))
-}
-
-/// Rozliší neznámý příkaz od známého příkazu se špatnými parametry
-fn unknown_or_wrong_arguments(name: &str) -> ParseError {
-    match USAGE.iter().find(|(command, _)| *command == name) {
-        Some((_, usage)) => ParseError::WrongArguments(usage),
-        None => ParseError::UnknownCommand(name.to_string()),
-    }
-}
-
-/// Převede velikost ve tvaru `600MB` (nebo jen `600`) na bajty
-fn parse_size(text: &str) -> Result<u64, ParseError> {
-    let upper = text.to_ascii_uppercase();
-    let number = upper.strip_suffix("MB").unwrap_or(&upper);
-
-    let units = match number.parse::<u64>() {
-        Ok(n) => n,
-        // Syntakticky správné číslo, jen se nevejde do u64 (víc než 20 číslic)
-        Err(e) if *e.kind() == IntErrorKind::PosOverflow => u64::MAX,
-        Err(_) => return Err(ParseError::InvalidSize(text.to_string())),
-    };
-
-    // saturating_mul: při přetečení vrátí u64::MAX místo panic/přetečení
-    Ok(units.saturating_mul(FORMAT_UNIT))
-}
-
-/// Co má shell udělat po vykonání příkazu
 enum Flow {
     Continue,
     Exit,
 }
 
-/// Výsledek úspěšného příkazu – vypisuje ho jen [`Shell::execute`]
-enum Output {
-    /// Vypíše „OK“
-    Ok,
-    /// Vypíše řádky textu (výsledek ls, pwd, …)
-    Lines(Vec<String>),
-    /// Vypíše text tak, jak je (obsah souboru u cat)
-    RawText(String),
-}
-
-/// Stav běžícího shellu
+#[derive(Debug)]
 pub struct Shell {
-    /// Cesta k souboru se souborovým systémem (parametr programu)
-    fs_path: PathBuf,
-    /// Otevřený FS, `None` dokud soubor neobsahuje platný FS (pak funguje jen format)
+    fs_host_filepath: PathBuf,
     fs: Option<FileSystem>,
 }
 
 impl Shell {
-    /// Otevře FS ze souboru `fs_path`, pokud v něm nějaký je
-    pub fn new(fs_path: PathBuf) -> Self {
-        // Hlášení při startu jdou na stderr: nejsou odpovědí na žádný příkaz
-        let fs = match FileSystem::open(&fs_path) {
+    pub fn new(fs_host_filepath: PathBuf) -> Self {
+        let fs = match FileSystem::try_open(&fs_host_filepath) {
             Ok(fs) => {
-                eprintln!(
-                    "{}: filesystem loaded ({}, {} free)",
-                    fs_path.display(),
-                    fs.superblock(),
-                    fs.free_clusters()
+                println!(
+                    "{}: filesystem loaded ({}, {})",
+                    fs_host_filepath.display(),
+                    fs.info_superblock(),
+                    fs.info_fat()
                 );
                 Some(fs)
             }
             Err(e) => {
-                eprintln!("{}: {e}", fs_path.display());
+                eprintln!("{}: {}", fs_host_filepath.display(), e);
                 None
             }
         };
 
-        Shell { fs_path, fs }
+        Shell { fs_host_filepath, fs }
     }
 
-    /// Hlavní smyčka
+    /// Main loop
     pub fn run(&mut self) {
-        // Výzvu zobrazujeme jen při ručním psaní (u testů špiní výstup)
+        // Show prompt if stidin is terminal (otherwise, it would make output messy)
         let interactive = io::stdin().is_terminal();
         let mut stdin = io::stdin().lock();
         let mut buf = Vec::new();
@@ -209,33 +50,31 @@ impl Shell {
         loop {
             if interactive {
                 print!("pseudofat> ");
-                // print! sám nevyprázdní buffer – bez flush by se výzva nezobrazila
+                // print! does not clear the buffer on its own
                 let _ = io::stdout().flush();
             }
 
             buf.clear();
-            // Neřeším \r\n, protože mě zajímá konec, a ten je všude stejný (pwd\n, pwd\r\n)
-            // Proč ne jednodušší read_line(&mut String)? Vyžaduje platné UTF-8
-            // Neřeší UTF-16 ani jiné, čte jen bajty až do \n
+
+            // CRLF, LF both have \n
             match stdin.read_until(b'\n', &mut buf) {
-                // Zahrnuje EOF
+                // Contains EOF, end
                 Ok(0) => {
-                    // Konec vstupu: odřádkujeme, aby terminál nezůstal za výzvou
                     if interactive {
                         println!();
                     }
                     break;
                 }
                 Ok(_) => {}
-                // Typicky skoro nikdy nenastane, jen při chybách OS apod
+                // Almost never happens, just on OS errors
                 Err(e) => {
                     eprintln!("ERROR: cannot read input: {e}");
                     break;
                 }
             }
 
-            // Do teď se UTF-8 nehlídalo. Platné UTF-8 převede,
-            // nevalidní nahradí za U+FFFD "�" (REPLACEMENT CHARACTER)
+            // Until now, UTF-8 has not been checked. Valid UTF-8 is converted,
+            // invalid characters are replaced with U+FFFD “�” (REPLACEMENT CHARACTER)
             let line = String::from_utf8_lossy(&buf);
 
             if let Flow::Exit = self.process_line(&line) {
@@ -244,9 +83,9 @@ impl Shell {
         }
     }
 
-    /// Zpracuje jeden řádek: rozpozná příkaz a vykoná ho
+    /// Processes a single line: recognizes the command and executes it
     fn process_line(&mut self, line: &str) -> Flow {
-        match parse(line) {
+        match Command::str_to_command(line) {
             Ok(None) => Flow::Continue,
             Ok(Some(command)) => self.execute(command),
             Err(e) => {
@@ -256,13 +95,20 @@ impl Shell {
         }
     }
 
-    /// Vykoná syntakticky správný příkaz a vypíše výsledek
+    /// It will execute a syntactically correct command and display the result
     fn execute(&mut self, command: Command) -> Flow {
-        if let Command::Exit = command {
-            return Flow::Exit;
-        }
+        let result = match command {
+            Command::Exit => return Flow::Exit,
+            // format is the only one that works even without a formatted file system
+            Command::Format { size_raw } => do_format(&mut self.fs, &self.fs_host_filepath, &size_raw),
+            // All other commands require FS — without it, they'll end up here as NOT FORMATTED
+            command => self
+                .require_fs()
+                .map_err(|e| e.into())
+                .and_then(|fs| run_fs_command(fs, command))
+        };
 
-        match self.run_command(command) {
+        match result {
             Ok(Output::Ok) => println!("OK"),
             Ok(Output::Lines(lines)) => {
                 for line in lines {
@@ -271,73 +117,54 @@ impl Shell {
             }
             Ok(Output::RawText(text)) => {
                 print!("{text}");
-                // Bez odřádkování na konci by se obsah slil s výstupem dalšího příkazu
                 if !text.is_empty() && !text.ends_with('\n') {
                     println!();
                 }
             }
-            // Sémantické chyby jsou stderr
-            Err(e) => println!("{e}"),
+            Err(e) => eprintln!("{e}"),
         }
 
         Flow::Continue
     }
 
-    /// Vykoná příkaz a vrátí výsledek k vypsání
-    fn run_command(&mut self, command: Command) -> Result<Output, FsError> {
-        // format jako jediný funguje i bez naformátovaného FS
-        if let Command::Format { size_bytes } = command {
-            return self.format(size_bytes);
-        }
-
-        // Všechny ostatní příkazy potřebují FS – bez něj skončí tady s NOT FORMATTED
-        let fs = self.require_fs()?;
-
-        match command {
-            Command::Mkdir { path } => fs.mkdir(&path).map(|()| Output::Ok),
-            Command::Cd { path } => fs.cd(&path).map(|()| Output::Ok),
-            Command::Pwd => fs.pwd().map(|path| Output::Lines(vec![path])),
-            Command::Ls { path } => fs.ls(path.as_deref()).map(Output::Lines),
-            Command::Cat { path } => {
-                // Obsah nemusí být platné UTF-8. Konzole na Windows neplatné UTF-8 vypsat
-                // odmítne, proto lossy (přesné bajty dostane uživatel přes outcp)
-                let data = fs.read_file(&path)?;
-                Ok(Output::RawText(String::from_utf8_lossy(&data).into_owned()))
-            }
-            Command::Info { path } => fs.info(&path).map(Output::Lines),
-            Command::Incp { host_src, dst } => {
-                let data = host::read_file(&host_path(&host_src))?;
-                fs.create_file(&dst, &data).map(|()| Output::Ok)
-            }
-            Command::Outcp { src, host_dst } => {
-                let data = fs.read_file(&src)?;
-                host::write_file(&host_path(&host_dst), &data).map(|()| Output::Ok)
-            }
-            _ => Ok(Output::Lines(vec!["NOT IMPLEMENTED".to_string()])),
-        }
-    }
-
-    /// Vrátí otevřený FS, nebo chybu, pokud ještě není naformátovaný
+    /// Returns opened FS, or error, if not formatted
     fn require_fs(&mut self) -> Result<&mut FileSystem, FsError> {
         self.fs.as_mut().ok_or(FsError::NotFormatted)
     }
+}
 
-    /// format: přepíše soubor novým prázdným FS
-    fn format(&mut self, size_bytes: u64) -> Result<Output, FsError> {
-        // Starý FS zavřeme, aby soubor nebyl při přepisování otevřený dvakrát
-        self.fs = None;
-
-        match FileSystem::format(&self.fs_path, size_bytes) {
-            Ok(fs) => {
-                self.fs = Some(fs);
-                Ok(Output::Ok)
-            }
-            Err(e) => {
-                // Format mohl selhat ještě před zásahem do souboru (nesmyslná velikost).
-                // Původní FS pak zůstal netknutý, takže ho zkusíme otevřít znovu
-                self.fs = FileSystem::open(&self.fs_path).ok();
-                Err(e)
-            }
+/// Vykoná příkaz nad otevřeným FS a vrátí výsledek k vypsání
+fn run_fs_command(fs: &mut FileSystem, command: Command) -> Result<Output, CommandExecError> {
+    match command {
+        /*Command::Cp { src, dst } => fs.cp(&src, &dst).map(|()| Output::Ok),
+        Command::Mv { src, dst } => fs.mv(&src, &dst).map(|()| Output::Ok),
+        Command::Rm { path } => fs.rm(&path).map(|()| Output::Ok),
+        Command::Mkdir { path } => fs.mkdir(&path).map(|()| Output::Ok),
+        Command::Rmdir { path } => fs.rmdir(&path).map(|()| Output::Ok),
+        Command::Ls { path } => fs.ls(path.as_deref()).map(Output::Lines),
+        Command::Cat { path } => {
+            let data = fs.read_file(&path)?;
+            Ok(Output::RawText(String::from_utf8_lossy(&data).into_owned()))
+        }
+        Command::Cd { path } => fs.cd(&path).map(|()| Output::Ok),
+        Command::Pwd => fs.pwd().map(|path| Output::Lines(vec![path])),
+        Command::Info { path } => fs.info(&path).map(Output::Lines),
+        Command::Incp { host_src, dst } => {
+            let data = host::read_file(&parse_host_path(&host_src))?;
+            fs.create_file(&dst, &data).map(|()| Output::Ok)
+        }
+        Command::Outcp { src, host_dst } => {
+            let data = fs.read_file(&src)?;
+            host::write_file(&parse_host_path(&host_dst), &data).map(|()| Output::Ok)
+        }
+        Command::Check => fs.check().map(Output::Lines),
+        Command::Bug { path, kind } => fs.bug(&path, kind).map(|done| Output::Lines(vec![format!("OK ({done})")])),*/
+        // Shell::execute should run these before
+        Command::Load { .. } | Command::Format { .. } | Command::Exit => {
+            Err(AlreadyHandled(String::from("Internal fatal error, attempt to execute command twice.")))
+        }
+        _ => {
+            Err(NotImplemented)
         }
     }
 }

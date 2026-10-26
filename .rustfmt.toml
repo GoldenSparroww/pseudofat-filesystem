@@ -1,5 +1,6 @@
 # Maximum width of a line (modern standards favor 100 or 120 over the default 100)
 max_width = 120
+use_small_heuristics = "Max"
 
 # Style for imports/use statements
 imports_granularity = "Crate"       # Groups imports by crate (e.g., use std::io::{self, Read};)
@@ -24,5 +25,4 @@ reorder_modules = true
 reorder_impl_items = true
 
 # Misc trailing commas
-use_small_heuristics = "Default"
 trailing_comma = "Vertical"         # Always add trailing commas in multiline structs/enums/tuples
