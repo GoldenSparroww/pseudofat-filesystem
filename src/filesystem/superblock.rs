@@ -101,7 +101,7 @@ impl Superblock {
         })
     }
 
-    pub fn load(disk: &mut Disk) -> Result<Superblock, FsError> {
+    pub fn load(disk: &Disk) -> Result<Superblock, FsError> {
         let disk_size = disk.get_size()?;
 
         // Can I at least read superblock?

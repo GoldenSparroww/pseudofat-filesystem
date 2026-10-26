@@ -15,7 +15,7 @@ const RAW_FREE: u32 = u32::MAX;
 const RAW_EOF: u32 = u32::MAX - 1;
 const RAW_BAD: u32 = u32::MAX - 2;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FATPtrEntry {
     FREE,
     EOF,
@@ -55,10 +55,10 @@ impl FAT {
         FAT { fat_start, ptr_entries: vec![RAW_FREE; cluster_count as usize] }
     }
 
-    pub fn load(disk: &mut Disk, fat_start: u64, cluster_count: u32) -> Result<FAT, FsError> {
+    pub fn load(disk: &Disk, fat_start: u64, cluster_count: u32) -> Result<FAT, FsError> {
         let mut bytes = vec![0u8; (cluster_count as usize) * (FAT_INDEX_SIZE as usize)];
         disk.read_at(fat_start, &mut bytes)
-            .map_err(|e| Corrupted(format!("Cannot read FAT table. ({})", e)));
+            .map_err(|e| Corrupted(format!("Cannot read FAT table. ({})", e)))?;
 
         // as_chunks::<4>() divides to an array [u8; 4] (each chunk is one pointer/entry)
         // rest is always empty - ensured in Superblock::new()
@@ -83,6 +83,12 @@ impl FAT {
         self.save_range(disk, index, index)
     }
 
+    /// Item for the `cluster` cluster; `None` for a number outside the range
+    pub fn get(&self, cluster: u32) -> Option<FATPtrEntry> {
+        // It doesn't directly index entries[i], because 300,000 entries but only have 100,000 clusters
+        self.ptr_entries.get(cluster as usize).map(|&raw| FATPtrEntry::from_raw(raw))
+    }
+
     /// Save entries `first..=last`. Abstracts out FAT offset
     fn save_range(&self, disk: &mut Disk, first: usize, last: usize) -> Result<(), FsError> {
         let bytes: Vec<u8> = self.ptr_entries[first..=last]
@@ -90,6 +96,77 @@ impl FAT {
             .flat_map(|raw| raw.to_le_bytes())
             .collect();
         disk.write_at(self.fat_start + (first as u64) * FAT_INDEX_SIZE, &bytes)
+    }
+
+    /// Finds `count` available clusters and concatenates them into a string ending with EOF.
+    /// Returns the cluster numbers in the order they appear in the string
+    pub fn allocate(&mut self, disk: &mut Disk, count: usize) -> Result<Vec<u32>, FsError> {
+        let clusters: Vec<u32> = (0..(self.ptr_entries.len() as u32))
+            .filter(|&cluster| self.ptr_entries[cluster as usize] == RAW_FREE)
+            .take(count)
+            .collect();
+
+        if clusters.len() < count {
+            return Err(FsError::DiskFull);
+        }
+
+        // Each cluster points at next one, last is EOF
+        for (i, &cluster) in clusters.iter().enumerate() {
+            let entry = match clusters.get(i + 1) {
+                Some(&next) => FATPtrEntry::Next(next),
+                None => FATPtrEntry::EOF,
+            };
+            self.ptr_entries[cluster as usize] = entry.to_raw();
+        }
+
+        // Nothing to write when `count == 0` (clusters is empty)
+        if let (Some(&first), Some(&last)) = (clusters.iter().min(), clusters.iter().max()) {
+            self.save_range(disk, first as usize, last as usize)?;
+        }
+
+        Ok(clusters)
+    }
+
+    /// Iterates through the string starting at `first` and returns the numbers of its clusters in order
+    /// <br> **NOTE**: I have to pass a sort of “artificial” reference to `first`, i.e., `FATEntry::Next(first)`, otherwise
+    /// the first cluster would be omitted.
+    pub fn chain(&self, first: FATPtrEntry) -> Result<Vec<u32>, FsError> {
+        let mut clusters = Vec::new();
+        let mut current = first;
+
+        loop {
+            let cluster = match current {
+                FATPtrEntry::EOF => return Ok(clusters),
+                FATPtrEntry::Next(cluster) => cluster,
+                FATPtrEntry::FREE => return Err(Corrupted("chain contains a FREE entry".to_owned())),
+                FATPtrEntry::BAD => return Err(Corrupted("chain contains a BAD entry".to_owned())),
+            };
+
+            if clusters.len() >= self.ptr_entries.len() {
+                return Err(Corrupted("cycle in chain".to_owned()));
+            }
+
+            let Some(next) = self.get(cluster) else {
+                return Err(Corrupted(format!("invalid cluster number {cluster}")));
+            };
+
+            clusters.push(cluster);
+            current = next;
+        }
+    }
+
+    pub fn free_chain(&mut self, disk: &mut Disk, first: FATPtrEntry) -> Result<(), FsError> {
+        let clusters = self.chain(first)?;
+
+        for &cluster in &clusters {
+            self.ptr_entries[cluster as usize] = RAW_FREE;
+        }
+
+        if let (Some(&first), Some(&last)) = (clusters.iter().min(), clusters.iter().max()) {
+            self.save_range(disk, first as usize, last as usize)?;
+        }
+
+        Ok(())
     }
 }
 

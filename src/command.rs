@@ -2,7 +2,12 @@ use std::fmt;
 
 use crate::filesystem::FsError;
 
+pub mod cd;
 pub mod format;
+pub mod ls;
+pub mod mkdir;
+pub mod pwd;
+pub mod rmdir;
 
 // ===== Command definitions ======
 
@@ -114,7 +119,6 @@ fn unknown_or_wrong_arguments(name: &str) -> ParseError {
 
 pub enum Output {
     Ok,
-    Lines(Vec<String>),
     RawText(String),
 }
 

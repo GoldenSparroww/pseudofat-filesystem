@@ -110,11 +110,6 @@ impl Shell {
 
         match result {
             Ok(Output::Ok) => println!("OK"),
-            Ok(Output::Lines(lines)) => {
-                for line in lines {
-                    println!("{line}");
-                }
-            }
             Ok(Output::RawText(text)) => {
                 print!("{text}");
                 if !text.is_empty() && !text.ends_with('\n') {
@@ -136,18 +131,18 @@ impl Shell {
 /// Vykoná příkaz nad otevřeným FS a vrátí výsledek k vypsání
 fn run_fs_command(fs: &mut FileSystem, command: Command) -> Result<Output, CommandExecError> {
     match command {
+        Command::Cd { path } => fs.do_cd(&path),
+        Command::Pwd => fs.do_pwd(),
+        Command::Ls { path } => fs.do_ls(path.as_deref()),
+        Command::Mkdir { path } => fs.do_mkdir(&path),
+        Command::Rmdir { path } => fs.do_rmdir(&path),
         /*Command::Cp { src, dst } => fs.cp(&src, &dst).map(|()| Output::Ok),
         Command::Mv { src, dst } => fs.mv(&src, &dst).map(|()| Output::Ok),
         Command::Rm { path } => fs.rm(&path).map(|()| Output::Ok),
-        Command::Mkdir { path } => fs.mkdir(&path).map(|()| Output::Ok),
-        Command::Rmdir { path } => fs.rmdir(&path).map(|()| Output::Ok),
-        Command::Ls { path } => fs.ls(path.as_deref()).map(Output::Lines),
         Command::Cat { path } => {
             let data = fs.read_file(&path)?;
             Ok(Output::RawText(String::from_utf8_lossy(&data).into_owned()))
         }
-        Command::Cd { path } => fs.cd(&path).map(|()| Output::Ok),
-        Command::Pwd => fs.pwd().map(|path| Output::Lines(vec![path])),
         Command::Info { path } => fs.info(&path).map(Output::Lines),
         Command::Incp { host_src, dst } => {
             let data = host::read_file(&parse_host_path(&host_src))?;

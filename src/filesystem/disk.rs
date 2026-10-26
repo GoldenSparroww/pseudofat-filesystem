@@ -35,9 +35,11 @@ impl Disk {
         Ok(self.file.metadata()?.len())
     }
 
-    pub fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), FsError> {
-        self.file.seek(SeekFrom::Start(offset))?;
-        self.file.read_exact(buf).map_err(|e| e.into())
+    pub fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<(), FsError> {
+        let mut file = &self.file; 
+        file.seek(SeekFrom::Start(offset))?;
+        file.read_exact(buf)?;
+        Ok(())
     }
 
     pub fn write_at(&mut self, offset: u64, data: &[u8]) -> Result<(), FsError> {

@@ -1,15 +1,16 @@
 //! Filesystem pseudoFAT
 
-mod dir;
+pub(super) mod dir;
 mod disk;
-mod fat;
+pub(super) mod fat;
+mod paths;
 mod superblock;
 
 use std::path::Path;
 use std::{fmt, io};
 
 use crate::config::CLUSTER_SIZE;
-use crate::filesystem::dir::Dir;
+use crate::filesystem::dir::{Dir, DirEntry, Name};
 use crate::filesystem::disk::Disk;
 use crate::filesystem::fat::{FAT, FATPtrEntry};
 use crate::filesystem::superblock::Superblock;
@@ -28,6 +29,13 @@ pub enum FsError {
     DiskIo(io::Error),
     Corrupted(String),
     SuperblockCannotCreate(String),
+    InvalidFileName(String),
+    PathNotFound,
+    DiskFull,
+    DirFull,
+    FileExist,
+    NotEmpty,
+    NotAllowed(String),
 }
 
 impl From<io::Error> for FsError {
@@ -43,21 +51,28 @@ impl fmt::Display for FsError {
             FsError::DiskIo(e) => write!(f, "Disk I/O error: {e}"),
             FsError::Corrupted(msg) => write!(f, "Filesystem corrupted: {msg}"),
             FsError::SuperblockCannotCreate(msg) => write!(f, "Cannot create superblock: {msg}"),
+            FsError::InvalidFileName(detail) => write!(f, "Invalid file name: ({detail})"),
+            FsError::PathNotFound => write!(f, "Path not found."),
+            FsError::DiskFull => write!(f, "Disk is full."),
+            FsError::DirFull => write!(f, "Directory is full."),
+            FsError::FileExist => write!(f, "File exists."),
+            FsError::NotEmpty => write!(f, "Directory is not empty."),
+            FsError::NotAllowed(msg) => write!(f, "Not allowed: {msg}"),
         }
     }
 }
 
 impl FileSystem {
     pub fn try_open(path: &Path) -> Result<FileSystem, FsError> {
-        let mut disk = match Disk::open(path) {
+        let disk = match Disk::open(path) {
             Ok(disk) => disk,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(FsError::NotFormatted),
             Err(e) => return Err(e.into()),
         };
 
-        let superblock = Superblock::load(&mut disk)?;
+        let superblock = Superblock::load(&disk)?;
 
-        let fat = FAT::load(&mut disk, superblock.fat_start, superblock.cluster_count)?;
+        let fat = FAT::load(&disk, superblock.fat_start, superblock.cluster_count)?;
 
         let cwd = superblock.root_cluster;
 
@@ -75,7 +90,7 @@ impl FileSystem {
 
         // Directories have FATPtrEntry::EOF in FAT and no size (zero / one cluster)
         fat.set(&mut disk, superblock.root_cluster, FATPtrEntry::EOF)?;
-        Dir::create_dir(&mut disk, &superblock, superblock.root_cluster, superblock.root_cluster)?;
+        Dir::create(&mut disk, &superblock, superblock.root_cluster, superblock.root_cluster)?;
         let cwd = superblock.root_cluster;
 
         Ok(FileSystem { disk, superblock, fat, cwd })
@@ -87,5 +102,38 @@ impl FileSystem {
 
     pub fn info_fat(&self) -> String {
         self.fat.to_string()
+    }
+}
+
+impl FileSystem {
+    pub(super) fn set_cwd(&mut self, cwd_cluster: u32) {
+        self.cwd = cwd_cluster
+    }
+
+    pub(super) fn get_cwd(&self) -> u32 {
+        self.cwd
+    }
+
+    pub(super) fn get_root(&self) -> u32 {
+        self.superblock.root_cluster
+    }
+
+    pub(super) fn get_dir(&self, cluster: u32) -> Result<Dir, FsError> {
+        Dir::get(&self.disk, &self.superblock, cluster)
+    }
+
+    pub(super) fn create_dir(&mut self, parent: &mut Dir, name: Name) -> Result<(), FsError> {
+        // Create dir: check -> FAT (allocate) -> new cluster (`.`, `..`) -> entry in parent (insert + save slot).
+        parent.check_insert(&name)?;
+        let cluster = self.fat.allocate(&mut self.disk, 1)?[0];
+        Dir::create(&mut self.disk, &self.superblock, cluster, parent.get_cluster())?;
+        parent.insert(&mut self.disk, DirEntry::dir(name, cluster))
+    }
+
+    pub(super) fn remove_dir(&mut self, cluster: u32) -> Result<(), FsError> {
+        // Remove dir: entry in parent (remove + save slot) -> FAT (free chain).
+        let (mut parent, entry) = self.dir_of(cluster)?;
+        parent.remove(&mut self.disk, &entry.name)?;
+        self.fat.free_chain(&mut self.disk, entry.start)
     }
 }
