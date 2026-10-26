@@ -1,8 +1,8 @@
 //! Filesystem pseudoFAT
 
-pub(super) mod dir;
+mod dir;
 mod disk;
-pub(super) mod fat;
+mod fat;
 mod paths;
 mod superblock;
 
@@ -10,10 +10,13 @@ use std::path::Path;
 use std::{fmt, io};
 
 use crate::config::CLUSTER_SIZE;
-use crate::filesystem::dir::{Dir, DirEntry, Name};
+use crate::filesystem::dir::{Dir, Name};
 use crate::filesystem::disk::Disk;
 use crate::filesystem::fat::{FAT, FATPtrEntry};
 use crate::filesystem::superblock::Superblock;
+
+// Reexport what commands might need (ls)
+pub(crate) use dir::{DirEntry, DirEntryKind};
 
 #[derive(Debug)]
 pub struct FileSystem {
@@ -105,24 +108,25 @@ impl FileSystem {
     }
 }
 
+// Access functions
 impl FileSystem {
-    pub(super) fn set_cwd(&mut self, cwd_cluster: u32) {
+    pub fn set_cwd(&mut self, cwd_cluster: u32) {
         self.cwd = cwd_cluster
     }
 
-    pub(super) fn get_cwd(&self) -> u32 {
+    pub fn get_cwd(&self) -> u32 {
         self.cwd
     }
 
-    pub(super) fn get_root(&self) -> u32 {
+    pub fn get_root(&self) -> u32 {
         self.superblock.root_cluster
     }
 
-    pub(super) fn get_dir(&self, cluster: u32) -> Result<Dir, FsError> {
+    pub fn get_dir(&self, cluster: u32) -> Result<Dir, FsError> {
         Dir::get(&self.disk, &self.superblock, cluster)
     }
 
-    pub(super) fn create_dir(&mut self, parent: &mut Dir, name: Name) -> Result<(), FsError> {
+    pub fn create_dir(&mut self, parent: &mut Dir, name: Name) -> Result<(), FsError> {
         // Create dir: check -> FAT (allocate) -> new cluster (`.`, `..`) -> entry in parent (insert + save slot).
         parent.check_insert(&name)?;
         let cluster = self.fat.allocate(&mut self.disk, 1)?[0];
@@ -130,7 +134,7 @@ impl FileSystem {
         parent.insert(&mut self.disk, DirEntry::dir(name, cluster))
     }
 
-    pub(super) fn remove_dir(&mut self, cluster: u32) -> Result<(), FsError> {
+    pub fn remove_dir(&mut self, cluster: u32) -> Result<(), FsError> {
         // Remove dir: entry in parent (remove + save slot) -> FAT (free chain).
         let (mut parent, entry) = self.dir_of(cluster)?;
         parent.remove(&mut self.disk, &entry.name)?;

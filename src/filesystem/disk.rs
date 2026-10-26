@@ -36,7 +36,7 @@ impl Disk {
     }
 
     pub fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<(), FsError> {
-        let mut file = &self.file; 
+        let mut file = &self.file;
         file.seek(SeekFrom::Start(offset))?;
         file.read_exact(buf)?;
         Ok(())

@@ -29,7 +29,7 @@ pub enum Command {
     Format { size_raw: String },
     Exit,
     Check,
-    //TODO Bug { path: String, kind: Option<BugKind> },
+    //Bug { path: String, kind: Option<BugKind> },
 }
 
 /// Syntax of all commands

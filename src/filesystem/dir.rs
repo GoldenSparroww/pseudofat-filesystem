@@ -212,7 +212,10 @@ impl Dir {
 
     /// Clears the slot with `name` and writes it to disk. Does not touch FAT (caller frees the chain)
     pub fn remove(&mut self, disk: &mut Disk, name: &Name) -> Result<(), FsError> {
-        let Some(index) = self.slots.iter().position(|slot| slot.as_ref().is_some_and(|entry| entry.name == *name))
+        let Some(index) = self
+            .slots
+            .iter()
+            .position(|slot| slot.as_ref().is_some_and(|entry| entry.name == *name))
         else {
             return Err(FsError::PathNotFound);
         };
@@ -234,7 +237,7 @@ impl Dir {
             .filter(|entry| entry.name != Name::DOT && entry.name != Name::DOTDOT)
     }
 
-    fn save_slot(&self, disk: &mut Disk, index: usize) -> Result<(), FsError>  {
+    fn save_slot(&self, disk: &mut Disk, index: usize) -> Result<(), FsError> {
         let bytes = match &self.slots[index] {
             Some(entry) => entry.to_bytes(),
             None => [0u8; DIR_ENTRY_SIZE],

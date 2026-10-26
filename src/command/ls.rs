@@ -1,6 +1,6 @@
 //! Command `ls`
 
-use crate::filesystem::dir::{DirEntry, DirEntryKind};
+use crate::filesystem::{DirEntry, DirEntryKind};
 use crate::{
     command::{CommandExecError, Output},
     filesystem::FileSystem,

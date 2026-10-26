@@ -4,6 +4,7 @@ use crate::filesystem::{
     fat::FATPtrEntry,
 };
 
+// TODO, reorganize functions into less specific types
 impl FileSystem {
     pub fn get_dir_cluster_from_path(&self, path: &str) -> Result<u32, FsError> {
         let (cluster, last_part) = self.walk(path)?;
