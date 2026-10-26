@@ -105,7 +105,7 @@ impl Shell {
             command => self
                 .require_fs()
                 .map_err(|e| e.into())
-                .and_then(|fs| run_fs_command(fs, command))
+                .and_then(|fs| run_fs_command(fs, command)),
         };
 
         match result {
@@ -163,8 +163,6 @@ fn run_fs_command(fs: &mut FileSystem, command: Command) -> Result<Output, Comma
         Command::Load { .. } | Command::Format { .. } | Command::Exit => {
             Err(AlreadyHandled(String::from("Internal fatal error, attempt to execute command twice.")))
         }
-        _ => {
-            Err(NotImplemented)
-        }
+        _ => Err(NotImplemented),
     }
 }
