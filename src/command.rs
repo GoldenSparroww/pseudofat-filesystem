@@ -127,9 +127,11 @@ pub enum Output {
 pub enum CommandExecError {
     // Specific
     FormatInvalidSize(String),
+    RmdirNotEmpty,
 
     // General
     AlreadyHandled(String),
+    NotAllowed(String),
     NotImplemented,
     Fs(FsError), // Wrapper around FsError, which occured on command level
 }
@@ -143,6 +145,8 @@ impl fmt::Display for CommandExecError {
             CommandExecError::AlreadyHandled(e) => write!(f, "{e}"),
             CommandExecError::NotImplemented => write!(f, "NOT IMPLEMENTED!"),
             CommandExecError::Fs(e) => write!(f, "{e}"),
+            CommandExecError::RmdirNotEmpty => write!(f, "Directory is not empty."),
+            CommandExecError::NotAllowed(msg) => write!(f, "Not allowed: {msg}"),
         }
     }
 }

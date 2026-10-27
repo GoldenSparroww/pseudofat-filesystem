@@ -195,7 +195,7 @@ impl Dir {
 
     /// Checks whether an entry with `name` can be inserted (name is unique, free slot exists).
     /// Returns index of the first free slot. Call it before allocating clusters, so nothing leaks on error
-    pub fn check_insert(&self, name: &Name) -> Result<usize, FsError> {
+    pub fn is_insert_possible(&self, name: &Name) -> Result<usize, FsError> {
         if self.find(name).is_some() {
             return Err(FsError::FileExist);
         }
@@ -204,7 +204,7 @@ impl Dir {
     }
 
     pub fn insert(&mut self, disk: &mut Disk, entry: DirEntry) -> Result<(), FsError> {
-        let index = self.check_insert(&entry.name)?;
+        let index = self.is_insert_possible(&entry.name)?;
 
         self.slots[index] = Some(entry);
         self.save_slot(disk, index)

@@ -37,8 +37,6 @@ pub enum FsError {
     DiskFull,
     DirFull,
     FileExist,
-    NotEmpty,
-    NotAllowed(String),
 }
 
 impl From<io::Error> for FsError {
@@ -59,8 +57,6 @@ impl fmt::Display for FsError {
             FsError::DiskFull => write!(f, "Disk is full."),
             FsError::DirFull => write!(f, "Directory is full."),
             FsError::FileExist => write!(f, "File exists."),
-            FsError::NotEmpty => write!(f, "Directory is not empty."),
-            FsError::NotAllowed(msg) => write!(f, "Not allowed: {msg}"),
         }
     }
 }
@@ -128,7 +124,7 @@ impl FileSystem {
 
     pub fn create_dir(&mut self, parent: &mut Dir, name: Name) -> Result<(), FsError> {
         // Create dir: check -> FAT (allocate) -> new cluster (`.`, `..`) -> entry in parent (insert + save slot).
-        parent.check_insert(&name)?;
+        parent.is_insert_possible(&name)?;
         let cluster = self.fat.allocate(&mut self.disk, 1)?[0];
         Dir::create(&mut self.disk, &self.superblock, cluster, parent.get_cluster())?;
         parent.insert(&mut self.disk, DirEntry::dir(name, cluster))

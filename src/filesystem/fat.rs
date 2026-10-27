@@ -156,13 +156,13 @@ impl FAT {
     }
 
     pub fn free_chain(&mut self, disk: &mut Disk, first: FATPtrEntry) -> Result<(), FsError> {
-        let clusters = self.chain(first)?;
+        let chain_of_clusters = self.chain(first)?;
 
-        for &cluster in &clusters {
+        for &cluster in &chain_of_clusters {
             self.ptr_entries[cluster as usize] = RAW_FREE;
         }
 
-        if let (Some(&first), Some(&last)) = (clusters.iter().min(), clusters.iter().max()) {
+        if let (Some(&first), Some(&last)) = (chain_of_clusters.iter().min(), chain_of_clusters.iter().max()) {
             self.save_range(disk, first as usize, last as usize)?;
         }
 

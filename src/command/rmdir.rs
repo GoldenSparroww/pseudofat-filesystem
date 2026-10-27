@@ -10,15 +10,15 @@ impl FileSystem {
         let cluster = self.get_dir_cluster_from_path(path)?;
 
         if cluster == self.get_root() {
-            return Err(FsError::NotAllowed("cannot remove the root directory".to_owned()).into());
+            return Err(CommandExecError::NotAllowed("cannot remove the root directory".to_owned()).into());
         }
 
         if self.get_dir(cluster)?.get_slots().next().is_some() {
-            return Err(FsError::NotEmpty.into());
+            return Err(CommandExecError::RmdirNotEmpty);
         }
 
         if cluster == self.get_cwd() {
-            return Err(FsError::NotAllowed("cannot remove the current directory".to_owned()).into());
+            return Err(CommandExecError::NotAllowed("cannot remove the current directory".to_owned()).into());
         }
 
         self.remove_dir(cluster)?;
