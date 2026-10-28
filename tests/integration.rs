@@ -15,15 +15,33 @@ struct Run {
 
 /// Path to a not-yet-existing FS file in cargo's tmp dir (tests run in parallel -> unique name per test)
 fn fs_file(name: &str) -> PathBuf {
-    let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.dat"));
+    let path = tmp_path(&format!("{name}.dat"));
     let _ = std::fs::remove_file(&path);
     path
+}
+
+/// Path in cargo's tmp dir, where the binary runs (see `run`)
+fn tmp_path(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_TARGET_TMPDIR")).join(name)
+}
+
+/// Creates a file on the host for `incp`. Returns just its name, because the binary runs in the tmp dir
+/// (the full path may contain spaces, which the command parser would split)
+fn host_file(name: &str, content: &[u8]) -> String {
+    std::fs::write(tmp_path(name), content).unwrap();
+    name.to_owned()
+}
+
+/// Content spanning several clusters (cluster = 1024 B), one line without `\n`
+fn big_content(len: usize) -> Vec<u8> {
+    (0..len).map(|i| b'a' + (i % 26) as u8).collect()
 }
 
 /// Runs the binary over `fs` with `input` as stdin
 fn run(fs: &Path, input: &str) -> Run {
     let mut child = Command::new(env!("CARGO_BIN_EXE_pseudofat"))
         .arg(fs)
+        .current_dir(env!("CARGO_TARGET_TMPDIR"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -140,7 +158,7 @@ fn cd_and_pwd() {
 fn cd_not_found_keeps_cwd() {
     let r = fresh("cd_not_found", "mkdir a1\ncd a1\ncd x\npwd\n");
     assert_eq!(r.stdout, ["OK", "OK", "/a1"]);
-    assert!(r.stderr.contains("Path not found."), "{}", r.stderr);
+    assert!(r.stderr.contains("PATH NOT FOUND"), "{}", r.stderr);
 }
 
 // ===== ls ======
@@ -155,7 +173,7 @@ fn ls_empty_dir() {
 fn ls_not_found() {
     let r = fresh("ls_not_found", "ls x\n");
     assert!(r.stdout.is_empty(), "{:?}", r.stdout);
-    assert!(r.stderr.contains("Path not found."), "{}", r.stderr);
+    assert!(r.stderr.contains("PATH NOT FOUND"), "{}", r.stderr);
 }
 
 // ===== mkdir ======
@@ -170,14 +188,14 @@ fn mkdir_and_ls() {
 fn mkdir_exists() {
     let r = fresh("mkdir_exists", "mkdir a1\nmkdir a1\nmkdir /\nmkdir .\n");
     assert_eq!(r.stdout, ["OK"]);
-    assert_eq!(r.stderr.matches("File exists.").count(), 3, "{}", r.stderr);
+    assert_eq!(r.stderr.matches("EXIST").count(), 3, "{}", r.stderr);
 }
 
 #[test]
 fn mkdir_path_not_found() {
     let r = fresh("mkdir_not_found", "mkdir x/y\n");
     assert!(r.stdout.is_empty(), "{:?}", r.stdout);
-    assert!(r.stderr.contains("Path not found."), "{}", r.stderr);
+    assert!(r.stderr.contains("PATH NOT FOUND"), "{}", r.stderr);
 }
 
 #[test]
@@ -219,14 +237,14 @@ fn rmdir_ok() {
 fn rmdir_not_found() {
     let r = fresh("rmdir_not_found", "rmdir x\n");
     assert!(r.stdout.is_empty(), "{:?}", r.stdout);
-    assert!(r.stderr.contains("Path not found."), "{}", r.stderr);
+    assert!(r.stderr.contains("PATH NOT FOUND"), "{}", r.stderr);
 }
 
 #[test]
 fn rmdir_not_empty() {
     let r = fresh("rmdir_not_empty", "mkdir a1\nmkdir a1/b1\nrmdir a1\nls\n");
     assert_eq!(r.stdout, ["OK", "OK", "DIR: a1"]);
-    assert!(r.stderr.contains("Directory is not empty."), "{}", r.stderr);
+    assert!(r.stderr.contains("NOT EMPTY"), "{}", r.stderr);
 }
 
 #[test]
@@ -245,4 +263,212 @@ fn rmdir_frees_cluster() {
 
     run(&fs, "mkdir a1\nrmdir a1\n");
     assert_eq!(banner(&fs), before);
+}
+
+
+// ===== incp, cat ======
+
+#[test]
+fn incp_and_cat() {
+    let small = host_file("incp_cat_small.txt", b"ahoj svete");
+    let big = big_content(3000);
+    let big_name = host_file("incp_cat_big.txt", &big);
+
+    let r = fresh("incp_cat", &format!("incp {small} s.txt\nincp {big_name} b.txt\ncat s.txt\ncat b.txt\n"));
+    assert_eq!(r.stdout, ["OK", "OK", "ahoj svete", &String::from_utf8(big).unwrap()]);
+}
+
+#[test]
+fn incp_errors() {
+    let file = host_file("incp_errors.txt", b"x");
+    let r = fresh("incp_errors", &format!("incp nic.txt a\nincp {file} x/a\nincp {file} a\nincp {file} a\n"));
+    assert_eq!(r.stdout, ["OK"]);
+    assert!(r.stderr.contains("FILE NOT FOUND"), "{}", r.stderr);
+    assert!(r.stderr.contains("PATH NOT FOUND"), "{}", r.stderr);
+    assert!(r.stderr.contains("EXIST"), "{}", r.stderr);
+}
+
+#[test]
+fn cat_not_found() {
+    // missing file, a directory instead of a file
+    let r = fresh("cat_not_found", "mkdir a1\ncat nic\ncat a1\n");
+    assert_eq!(r.stdout, ["OK"]);
+    assert_eq!(r.stderr.matches("FILE NOT FOUND").count(), 2, "{}", r.stderr);
+}
+
+// ===== outcp ======
+
+#[test]
+fn outcp_multi_cluster_roundtrip() {
+    let big = big_content(3000);
+    let src = host_file("outcp_src.txt", &big);
+    let _ = std::fs::remove_file(tmp_path("outcp_dst.txt"));
+
+    let r = fresh("outcp_ok", &format!("incp {src} b.txt\noutcp b.txt outcp_dst.txt\n"));
+    assert_eq!(r.stdout, ["OK", "OK"]);
+    assert_eq!(std::fs::read(tmp_path("outcp_dst.txt")).unwrap(), big);
+}
+
+#[test]
+fn outcp_errors() {
+    let src = host_file("outcp_errors.txt", b"x");
+    let r = fresh("outcp_errors", &format!("incp {src} a\noutcp nic out.txt\noutcp a neni/out.txt\n"));
+    assert_eq!(r.stdout, ["OK"]);
+    assert!(r.stderr.contains("FILE NOT FOUND"), "{}", r.stderr);
+    assert!(r.stderr.contains("PATH NOT FOUND"), "{}", r.stderr);
+}
+
+// ===== cp ======
+
+#[test]
+fn cp_ok() {
+    let src = host_file("cp_ok.txt", &big_content(3000));
+    let r = fresh("cp_ok", &format!("incp {src} a.txt\nmkdir a1\ncp a.txt a1/b.txt\nls a1\ncat a1/b.txt\n"));
+    assert_eq!(&r.stdout[..4], ["OK", "OK", "OK", "FILE: b.txt"]);
+    assert_eq!(r.stdout[4].as_bytes(), big_content(3000));
+}
+
+#[test]
+fn cp_errors() {
+    let src = host_file("cp_errors.txt", b"x");
+    let r = fresh("cp_errors", &format!("incp {src} a\ncp nic b\ncp a x/b\ncp a a\n"));
+    assert_eq!(r.stdout, ["OK"]);
+    assert!(r.stderr.contains("FILE NOT FOUND"), "{}", r.stderr);
+    assert!(r.stderr.contains("PATH NOT FOUND"), "{}", r.stderr);
+    assert!(r.stderr.contains("EXIST"), "{}", r.stderr);
+}
+
+// ===== mv ======
+
+#[test]
+fn mv_rename_and_move() {
+    let src = host_file("mv_ok.txt", b"data");
+    let r = fresh("mv_ok", &format!("incp {src} a.txt\nmkdir a1\nmv a.txt b.txt\nmv b.txt a1/c.txt\nls\nls a1\ncat a1/c.txt\n"));
+    assert_eq!(r.stdout, ["OK", "OK", "OK", "OK", "DIR: a1", "FILE: c.txt", "data"]);
+}
+
+#[test]
+fn mv_dir_updates_parent() {
+    // After the move, `..` of b1 has to point to the root
+    let r = fresh("mv_dir", "mkdir a1\nmkdir a1/b1\nmv a1/b1 c1\ncd c1\npwd\ncd ..\npwd\n");
+    assert_eq!(r.stdout, ["OK", "OK", "OK", "OK", "/c1", "OK", "/"]);
+}
+
+#[test]
+fn mv_errors() {
+    let src = host_file("mv_errors.txt", b"x");
+    let r = fresh("mv_errors", &format!("incp {src} a\nmkdir a1\nmkdir a1/b1\nmv nic b\nmv a x/b\nmv a a1\nmv a1 a1/b1/a1\n"));
+    assert_eq!(r.stdout, ["OK", "OK", "OK"]);
+    assert!(r.stderr.contains("FILE NOT FOUND"), "{}", r.stderr);
+    assert!(r.stderr.contains("PATH NOT FOUND"), "{}", r.stderr);
+    assert!(r.stderr.contains("EXIST"), "{}", r.stderr);
+    assert!(r.stderr.contains("cannot move a directory into itself"), "{}", r.stderr);
+}
+
+// ===== rm ======
+
+#[test]
+fn rm_ok() {
+    let src = host_file("rm_ok.txt", b"x");
+    let r = fresh("rm_ok", &format!("incp {src} a\nrm a\nls\ncat a\n"));
+    assert_eq!(r.stdout, ["OK", "OK"]);
+    assert!(r.stderr.contains("FILE NOT FOUND"), "{}", r.stderr);
+}
+
+#[test]
+fn rm_not_found() {
+    // missing file, a directory instead of a file
+    let r = fresh("rm_not_found", "mkdir a1\nrm nic\nrm a1\nls\n");
+    assert_eq!(r.stdout, ["OK", "DIR: a1"]);
+    assert_eq!(r.stderr.matches("FILE NOT FOUND").count(), 2, "{}", r.stderr);
+}
+
+#[test]
+fn rm_frees_clusters() {
+    let src = host_file("rm_frees.txt", &big_content(3000));
+    let fs = fs_file("rm_frees");
+    run(&fs, "format 1MB\n");
+    let before = banner(&fs);
+
+    run(&fs, &format!("incp {src} a\ncp a b\n"));
+    assert_ne!(banner(&fs), before);
+
+    run(&fs, "rm a\nrm b\n");
+    assert_eq!(banner(&fs), before);
+}
+
+// ===== info ======
+
+#[test]
+fn info_file_and_dir() {
+    // Fresh FS: root is cluster 0, the file takes the next three, the directory the one after
+    let src = host_file("info.txt", &big_content(3000));
+    let r = fresh("info", &format!("incp {src} b.txt\nmkdir a1\ninfo b.txt\ninfo a1\ninfo /\ninfo nic\n"));
+    assert_eq!(
+        r.stdout,
+        ["OK", "OK", "b.txt – file – velikost: 3000B - 1,2,3", "a1 – dir – cluster - 4", "/ – dir – cluster - 0"]
+    );
+    assert!(r.stderr.contains("FILE NOT FOUND"), "{}", r.stderr);
+}
+
+// ===== load ======
+
+#[test]
+fn load_runs_script() {
+    // A failing command (cat) does not stop the script
+    let script = host_file("load_script.txt", b"mkdir a1\r\ncat nic\r\ncd a1\r\npwd\r\n");
+    let r = fresh("load_ok", &format!("incp {script} s.txt\nload s.txt\n"));
+    assert_eq!(r.stdout, ["OK", "OK", "OK", "/a1", "OK"]);
+    assert!(r.stderr.contains("FILE NOT FOUND"), "{}", r.stderr);
+}
+
+#[test]
+fn load_not_found() {
+    // The script has to be in our FS (copied by incp), not on the host
+    host_file("load_host.txt", b"pwd\n");
+    let r = fresh("load_not_found", "load load_host.txt\n");
+    assert!(r.stdout.is_empty(), "{:?}", r.stdout);
+    assert!(r.stderr.contains("FILE NOT FOUND"), "{}", r.stderr);
+}
+
+// ===== check, bug ======
+
+#[test]
+fn check_ok() {
+    let src = host_file("check_ok.txt", &big_content(3000));
+    let r = fresh("check_ok", &format!("mkdir a1\nincp {src} a1/b.txt\ncheck\n"));
+    assert_eq!(r.stdout, ["OK", "OK", "OK"]);
+}
+
+#[test]
+fn bug_kinds_detected_by_check() {
+    let src = host_file("bug_kinds.txt", &big_content(3000));
+    let r = fresh(
+        "bug_kinds",
+        &format!("incp {src} s.txt\nincp {src} c.txt\nincp {src} i.txt\nbug s.txt size\nbug c.txt cycle\nbug i.txt invalid\ncheck\n"),
+    );
+    assert_eq!(&r.stdout[3..6], ["Successfully damaged (size)", "Successfully damaged (cycle)", "Successfully damaged (invalid)"]);
+    assert_eq!(r.stdout.len(), 9, "{:?}", r.stdout);
+    assert!(r.stdout[6].starts_with("/s.txt: size"), "{:?}", r.stdout);
+    assert!(r.stdout[7].starts_with("/c.txt:") && r.stdout[7].contains("cycle"), "{:?}", r.stdout);
+    assert!(r.stdout[8].starts_with("/i.txt:") && r.stdout[8].contains("invalid cluster"), "{:?}", r.stdout);
+}
+
+#[test]
+fn bug_random_is_detected() {
+    let src = host_file("bug_random.txt", &big_content(3000));
+    let r = fresh("bug_random", &format!("incp {src} f.txt\nbug f.txt\ncheck\n"));
+    assert_eq!(r.stdout.len(), 3, "{:?}", r.stdout);
+    assert!(r.stdout[1].starts_with("Successfully damaged ("), "{:?}", r.stdout);
+    assert!(r.stdout[2].starts_with("/f.txt:"), "{:?}", r.stdout);
+}
+
+#[test]
+fn bug_errors() {
+    let empty = host_file("bug_empty.txt", b"");
+    let r = fresh("bug_errors", &format!("mkdir a1\nincp {empty} e.txt\nbug nic\nbug a1\nbug e.txt cycle\nbug e.txt free\n"));
+    assert_eq!(r.stdout, ["OK", "OK", "WRONG ARGUMENTS (usage: bug <s1> [size|cycle|invalid])"]);
+    assert_eq!(r.stderr.matches("FILE NOT FOUND").count(), 2, "{}", r.stderr);
+    // An empty file has no clusters, so only `size` can be applied
+    assert!(r.stderr.contains("cannot apply cycle"), "{}", r.stderr);
 }

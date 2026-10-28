@@ -39,11 +39,11 @@ pub fn write_file(path: &PathBuf, data: &[u8]) -> Result<(), FsError> {
             _ => FsError::HostFileWriteGeneralError,
         })?;
 
-    if let Err(e) = file.write_all(data) {
+    if file.write_all(data).is_err() {
         // In some cases, you cannot delete opened file, so drop it before removal
         drop(file);
         let _ = fs::remove_file(path);
-        return Err(e.into());
+        return Err(FsError::HostFileWriteGeneralError);
     }
 
     Ok(())

@@ -3,7 +3,7 @@
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 
-use crate::command::CommandExecError::{AlreadyHandled, NotImplemented};
+use crate::command::CommandExecError::AlreadyHandled;
 use crate::command::{Command, format::do_format};
 use crate::command::{CommandExecError, Output};
 use crate::filesystem::{FileSystem, FsError};
@@ -166,6 +166,5 @@ fn run_fs_command(fs: &mut FileSystem, command: Command) -> Result<Output, Comma
         Command::Load { .. } | Command::Format { .. } | Command::Exit => {
             Err(AlreadyHandled(String::from("Internal fatal error, attempt to execute command twice.")))
         }
-        _ => Err(NotImplemented),
     }
 }

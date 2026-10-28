@@ -61,7 +61,7 @@ pub fn do_format(
             // Format could fail before any write, in this case, try to re-open previous FS
             let previous_fs = FileSystem::try_open(&fs_host_filepath).ok();
             *fs = previous_fs;
-            Err(e.into())
+            Err(CommandExecError::FormatCannotCreate(e))
         }
     }
 }

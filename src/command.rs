@@ -134,12 +134,12 @@ pub enum Output {
 pub enum CommandExecError {
     // Specific
     FormatInvalidSize(String),
+    FormatCannotCreate(FsError),
     RmdirNotEmpty,
 
     // General
     AlreadyHandled(String),
     NotAllowed(String),
-    NotImplemented,
     Fs(FsError), // Wrapper around FsError, which occured on command level
 }
 
@@ -149,10 +149,10 @@ impl fmt::Display for CommandExecError {
             CommandExecError::FormatInvalidSize(text) => {
                 write!(f, "INVALID SIZE ({text}, expected e.g. 600MB)")
             }
+            CommandExecError::FormatCannotCreate(e) => write!(f, "CANNOT CREATE FILE ({e})"),
             CommandExecError::AlreadyHandled(e) => write!(f, "{e}"),
-            CommandExecError::NotImplemented => write!(f, "NOT IMPLEMENTED!"),
             CommandExecError::Fs(e) => write!(f, "{e}"),
-            CommandExecError::RmdirNotEmpty => write!(f, "Directory is not empty."),
+            CommandExecError::RmdirNotEmpty => write!(f, "NOT EMPTY"),
             CommandExecError::NotAllowed(msg) => write!(f, "Not allowed: {msg}"),
         }
     }
