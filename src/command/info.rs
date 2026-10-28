@@ -33,7 +33,10 @@ impl FileSystem {
                     false => format!(" (MISMATCH: size needs {needed} clusters, chain has {})", clusters.len()),
                 };
 
-                format!("{} – file – velikost: {size}B - {list}{mismatch}", entry.name)
+                // Space actually taken on disk: whole clusters of the real FAT chain
+                let on_disk = clusters.len() as u64 * self.get_cluster_size() as u64;
+
+                format!("{} – file – size: {size}B, on disk: {on_disk}B - {list}{mismatch}", entry.name)
             }
         };
 

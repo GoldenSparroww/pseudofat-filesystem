@@ -145,7 +145,7 @@ impl Shell {
     }
 }
 
-/// Vykoná příkaz nad otevřeným FS a vrátí výsledek k vypsání
+/// Executes a command on the opened FS and returns the result to print
 fn run_fs_command(fs: &mut FileSystem, command: Command) -> Result<Output, CommandExecError> {
     match command {
         Command::Cd { path } => fs.do_cd(&path),

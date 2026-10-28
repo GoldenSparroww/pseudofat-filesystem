@@ -74,7 +74,7 @@ impl fmt::Display for Name {
         let base = until_null(&self.0[..BASE_LEN]);
         let ext = until_null(&self.0[BASE_LEN..BASE_LEN + EXT_LEN]);
 
-        // lossy: jméno z poškozeného disku nemusí být platné ASCII/UTF-8
+        // lossy: a name from a corrupted disk may not be valid ASCII/UTF-8
         write!(f, "{}", String::from_utf8_lossy(base))?;
         if !ext.is_empty() {
             write!(f, ".{}", String::from_utf8_lossy(ext))?;

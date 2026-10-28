@@ -280,7 +280,7 @@ fn incp_and_cat() {
 #[test]
 fn incp_errors() {
     let file = host_file("incp_errors.txt", b"x");
-    let r = fresh("incp_errors", &format!("incp nic.txt a\nincp {file} x/a\nincp {file} a\nincp {file} a\n"));
+    let r = fresh("incp_errors", &format!("incp missing.txt a\nincp {file} x/a\nincp {file} a\nincp {file} a\n"));
     assert_eq!(r.stdout, ["OK"]);
     assert!(r.stderr.contains("FILE NOT FOUND"), "{}", r.stderr);
     assert!(r.stderr.contains("PATH NOT FOUND"), "{}", r.stderr);
@@ -290,7 +290,7 @@ fn incp_errors() {
 #[test]
 fn cat_not_found() {
     // missing file, a directory instead of a file
-    let r = fresh("cat_not_found", "mkdir a1\ncat nic\ncat a1\n");
+    let r = fresh("cat_not_found", "mkdir a1\ncat missing\ncat a1\n");
     assert_eq!(r.stdout, ["OK"]);
     assert_eq!(r.stderr.matches("FILE NOT FOUND").count(), 2, "{}", r.stderr);
 }
@@ -311,7 +311,7 @@ fn outcp_multi_cluster_roundtrip() {
 #[test]
 fn outcp_errors() {
     let src = host_file("outcp_errors.txt", b"x");
-    let r = fresh("outcp_errors", &format!("incp {src} a\noutcp nic out.txt\noutcp a neni/out.txt\n"));
+    let r = fresh("outcp_errors", &format!("incp {src} a\noutcp missing out.txt\noutcp a missing_dir/out.txt\n"));
     assert_eq!(r.stdout, ["OK"]);
     assert!(r.stderr.contains("FILE NOT FOUND"), "{}", r.stderr);
     assert!(r.stderr.contains("PATH NOT FOUND"), "{}", r.stderr);
@@ -330,7 +330,7 @@ fn cp_ok() {
 #[test]
 fn cp_errors() {
     let src = host_file("cp_errors.txt", b"x");
-    let r = fresh("cp_errors", &format!("incp {src} a\ncp nic b\ncp a x/b\ncp a a\n"));
+    let r = fresh("cp_errors", &format!("incp {src} a\ncp missing b\ncp a x/b\ncp a a\n"));
     assert_eq!(r.stdout, ["OK"]);
     assert!(r.stderr.contains("FILE NOT FOUND"), "{}", r.stderr);
     assert!(r.stderr.contains("PATH NOT FOUND"), "{}", r.stderr);
@@ -361,7 +361,7 @@ fn mv_errors() {
     let src = host_file("mv_errors.txt", b"x");
     let r = fresh(
         "mv_errors",
-        &format!("incp {src} a\nmkdir a1\nmkdir a1/b1\nmv nic b\nmv a x/b\nmv a a1\nmv a1 a1/b1/a1\n"),
+        &format!("incp {src} a\nmkdir a1\nmkdir a1/b1\nmv missing b\nmv a x/b\nmv a a1\nmv a1 a1/b1/a1\n"),
     );
     assert_eq!(r.stdout, ["OK", "OK", "OK"]);
     assert!(r.stderr.contains("FILE NOT FOUND"), "{}", r.stderr);
@@ -383,7 +383,7 @@ fn rm_ok() {
 #[test]
 fn rm_not_found() {
     // missing file, a directory instead of a file
-    let r = fresh("rm_not_found", "mkdir a1\nrm nic\nrm a1\nls\n");
+    let r = fresh("rm_not_found", "mkdir a1\nrm missing\nrm a1\nls\n");
     assert_eq!(r.stdout, ["OK", "DIR: a1"]);
     assert_eq!(r.stderr.matches("FILE NOT FOUND").count(), 2, "{}", r.stderr);
 }
@@ -408,10 +408,16 @@ fn rm_frees_clusters() {
 fn info_file_and_dir() {
     // Fresh FS: root is cluster 0, the file takes the next three, the directory the one after
     let src = host_file("info.txt", &big_content(3000));
-    let r = fresh("info", &format!("incp {src} b.txt\nmkdir a1\ninfo b.txt\ninfo a1\ninfo /\ninfo nic\n"));
+    let r = fresh("info", &format!("incp {src} b.txt\nmkdir a1\ninfo b.txt\ninfo a1\ninfo /\ninfo missing\n"));
     assert_eq!(
         r.stdout,
-        ["OK", "OK", "b.txt – file – velikost: 3000B - 1,2,3", "a1 – dir – cluster - 4", "/ – dir – cluster - 0"]
+        [
+            "OK",
+            "OK",
+            "b.txt – file – size: 3000B, on disk: 3072B - 1,2,3",
+            "a1 – dir – cluster - 4",
+            "/ – dir – cluster - 0"
+        ]
     );
     assert!(r.stderr.contains("FILE NOT FOUND"), "{}", r.stderr);
 }
@@ -421,7 +427,7 @@ fn info_file_and_dir() {
 #[test]
 fn load_runs_script() {
     // A failing command (cat) does not stop the script
-    let script = host_file("load_script.txt", b"mkdir a1\r\ncat nic\r\ncd a1\r\npwd\r\n");
+    let script = host_file("load_script.txt", b"mkdir a1\r\ncat missing\r\ncd a1\r\npwd\r\n");
     let r = fresh("load_ok", &format!("incp {script} s.txt\nload s.txt\n"));
     assert_eq!(r.stdout, ["OK", "OK", "OK", "/a1", "OK"]);
     assert!(r.stderr.contains("FILE NOT FOUND"), "{}", r.stderr);
@@ -478,7 +484,7 @@ fn bug_errors() {
     let empty = host_file("bug_empty.txt", b"");
     let r = fresh(
         "bug_errors",
-        &format!("mkdir a1\nincp {empty} e.txt\nbug nic\nbug a1\nbug e.txt cycle\nbug e.txt free\n"),
+        &format!("mkdir a1\nincp {empty} e.txt\nbug missing\nbug a1\nbug e.txt cycle\nbug e.txt free\n"),
     );
     assert_eq!(r.stdout, ["OK", "OK", "WRONG ARGUMENTS (usage: bug <s1> [size|cycle|invalid])"]);
     assert_eq!(r.stderr.matches("FILE NOT FOUND").count(), 2, "{}", r.stderr);

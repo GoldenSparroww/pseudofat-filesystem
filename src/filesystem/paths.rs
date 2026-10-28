@@ -24,7 +24,7 @@ impl FileSystem {
         let not_found = |_| FsError::FileNotFound;
 
         let (parent, Some(name)) = self.walk(path).map_err(not_found)? else {
-            return Err(FsError::FileNotFound); // `/`, `.`, `..` jsou adresáře
+            return Err(FsError::FileNotFound); // `/`, `.`, `..` are directories
         };
         let name = Name::from_str(name).map_err(not_found)?;
         let parent = self.get_dir(parent)?;
@@ -113,7 +113,7 @@ impl FileSystem {
             curr_cluster = parent_dir.get_cluster();
         }
 
-        // Jména jsou posbíraná od nejhlubšího ke kořeni
+        // Names are collected from the deepest one up to the root
         names.reverse();
         Ok(format!("/{}", names.join("/")))
     }
