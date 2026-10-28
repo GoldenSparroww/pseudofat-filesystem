@@ -15,6 +15,8 @@ const RAW_FREE: u32 = u32::MAX;
 const RAW_EOF: u32 = u32::MAX - 1;
 const RAW_BAD: u32 = u32::MAX - 2;
 
+// FREE, EOF, BAD: FAT terminology, kept in upper case on purpose
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FATPtrEntry {
     FREE,
@@ -43,6 +45,7 @@ impl FATPtrEntry {
     }
 }
 
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug)]
 pub struct FAT {
     fat_start: u64,

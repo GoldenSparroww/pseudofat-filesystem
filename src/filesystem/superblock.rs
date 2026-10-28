@@ -83,9 +83,9 @@ impl Superblock {
             // Not only respect u32::try_from but our stricter ones too
             Ok(n) if n <= fat::MAX_CLUSTER_COUNT => n,
             _ => {
-                return Err(SuperblockCannotCreate(format!(
-                    "Disk too large. Icrease cluster size, or lower disk size."
-                )));
+                return Err(SuperblockCannotCreate(
+                    "Disk too large. Icrease cluster size, or lower disk size.".to_string(),
+                ));
             }
         };
 

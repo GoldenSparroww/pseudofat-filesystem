@@ -2,7 +2,7 @@
 //!
 //! Only command which is not inside `impl Filesystem`, because it does not depend on it.
 
-use std::path::PathBuf;
+use std::path::Path;
 
 use crate::{
     command::{CommandExecError, Output},
@@ -44,7 +44,7 @@ fn parse_size(size_raw: &str) -> Result<u64, CommandExecError> {
 
 pub fn do_format(
     fs: &mut Option<FileSystem>,
-    fs_host_filepath: &PathBuf,
+    fs_host_filepath: &Path,
     size_raw: &str,
 ) -> Result<Output, CommandExecError> {
     // If formating old existing FS, close to prevent being open twice during write
@@ -59,7 +59,7 @@ pub fn do_format(
         }
         Err(e) => {
             // Format could fail before any write, in this case, try to re-open previous FS
-            let previous_fs = FileSystem::try_open(&fs_host_filepath).ok();
+            let previous_fs = FileSystem::try_open(fs_host_filepath).ok();
             *fs = previous_fs;
             Err(CommandExecError::FormatCannotCreate(e))
         }

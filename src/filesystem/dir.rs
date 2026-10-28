@@ -15,7 +15,7 @@ const AT_NAME: usize = 0;
 const AT_KIND: usize = 12;
 const AT_SIZE: usize = 16;
 const AT_START: usize = 20;
-/// Padding until 31
+// Padding until 31
 
 const KIND_FREE: u8 = 0; // Only used for reading dir from disk (distinguishes between emptiness and corrupted slots)
 const KIND_FILE: u8 = 1;
@@ -108,7 +108,7 @@ impl DirEntry {
         DirEntry { name, kind: DirEntryKind::File { size }, start }
     }
 
-    fn to_bytes(&self) -> [u8; DIR_ENTRY_SIZE] {
+    fn to_bytes(self) -> [u8; DIR_ENTRY_SIZE] {
         let mut bytes = [0u8; DIR_ENTRY_SIZE];
 
         let kind = match self.kind {
