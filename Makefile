@@ -28,6 +28,12 @@ $(TARGET_BIN): $(shell find src -type f 2>/dev/null) Cargo.toml
 test t:
 	cargo test
 
+fmt f:
+	cargo fmt
+
+clippy l:
+	cargo clippy --all-targets
+
 run r: $(TARGET_BIN)
 	$(TARGET_BIN) ./dist/myfs.dat
 
