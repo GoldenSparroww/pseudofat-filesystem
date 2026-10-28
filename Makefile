@@ -18,9 +18,13 @@ endif
 
 all: build
 
+# Recursive wildcard in pure make (`find` differs on Windows and Linux)
+rwildcard = $(foreach d,$(wildcard $(1:=/*)),$(call rwildcard,$d,$2) $(filter $(subst *,%,$2),$d))
+SOURCES := $(call rwildcard,src,*.rs)
+
 build b: $(TARGET_BIN)
 
-$(TARGET_BIN): $(shell find src -type f 2>/dev/null) Cargo.toml
+$(TARGET_BIN): $(SOURCES) Cargo.toml
 	cargo build --release
 	$(MKDIR)
 	$(COPY) $(BUILD_BIN) $(TARGET_BIN)
