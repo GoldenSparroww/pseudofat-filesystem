@@ -10,6 +10,7 @@ pub mod cp;
 pub mod format;
 pub mod incp;
 pub mod info;
+pub mod load;
 pub mod ls;
 pub mod mkdir;
 pub mod mv;
@@ -34,7 +35,7 @@ pub enum Command {
     Info { path: String },
     Incp { host_src: String, dst: String },
     Outcp { src: String, host_dst: String },
-    Load { host_path: String },
+    Load { path: String },
     Format { size_raw: String },
     Exit,
     Check,
@@ -55,7 +56,7 @@ const USAGE: &[(&str, &str)] = &[
     ("info", "info <s1|a1>"),
     ("incp", "incp <host-s1> <s2>"),
     ("outcp", "outcp <s1> <host-s2>"),
-    ("load", "load <host-s1>"),
+    ("load", "load <s1>"),
     ("format", "format <size>MB"),
     ("exit", "exit"),
     ("check", "check"),
@@ -98,7 +99,7 @@ impl Command {
             ["info", path] => Command::Info { path: path.to_string() },
             ["incp", host_src, dst] => Command::Incp { host_src: host_src.to_string(), dst: dst.to_string() },
             ["outcp", src, host_dst] => Command::Outcp { src: src.to_string(), host_dst: host_dst.to_string() },
-            ["load", host_path] => Command::Load { host_path: host_path.to_string() },
+            ["load", path] => Command::Load { path: path.to_string() },
             ["format", size_raw] => Command::Format { size_raw: size_raw.to_string() },
             ["exit"] => Command::Exit,
             ["check"] => Command::Check,

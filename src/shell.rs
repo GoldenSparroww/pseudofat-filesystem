@@ -8,7 +8,7 @@ use crate::command::{Command, format::do_format};
 use crate::command::{CommandExecError, Output};
 use crate::filesystem::{FileSystem, FsError};
 
-enum Flow {
+pub(crate) enum Flow {
     Continue,
     Exit,
 }
@@ -17,6 +17,8 @@ enum Flow {
 pub struct Shell {
     fs_host_filepath: PathBuf,
     fs: Option<FileSystem>,
+    /// Is a `load` running? (nested load is not allowed, a script loading itself would never end)
+    loading: bool,
 }
 
 impl Shell {
@@ -37,7 +39,7 @@ impl Shell {
             }
         };
 
-        Shell { fs_host_filepath, fs }
+        Shell { fs_host_filepath, fs, loading: false }
     }
 
     /// Main loop
@@ -83,24 +85,18 @@ impl Shell {
         }
     }
 
-    /// Processes a single line: recognizes the command and executes it
-    fn process_line(&mut self, line: &str) -> Flow {
-        match Command::str_to_command(line) {
-            Ok(None) => Flow::Continue,
-            Ok(Some(command)) => self.execute(command),
-            Err(e) => {
-                println!("{e}");
-                Flow::Continue
-            }
-        }
-    }
-
     /// It will execute a syntactically correct command and display the result
     fn execute(&mut self, command: Command) -> Flow {
         let result = match command {
             Command::Exit => return Flow::Exit,
             // format is the only one that works even without a formatted file system
             Command::Format { size_raw } => do_format(&mut self.fs, &self.fs_host_filepath, &size_raw),
+            Command::Load { path } => match self.do_load(&path) {
+                // `exit` inside the script ends the whole program
+                Ok(Flow::Exit) => return Flow::Exit,
+                Ok(Flow::Continue) => Ok(Output::Ok),
+                Err(e) => Err(e),
+            },
             // All other commands require FS — without it, they'll end up here as NOT FORMATTED
             command => self
                 .require_fs()
@@ -121,9 +117,30 @@ impl Shell {
 
         Flow::Continue
     }
+}
 
-    /// Returns opened FS, or error, if not formatted
-    fn require_fs(&mut self) -> Result<&mut FileSystem, FsError> {
+impl Shell {
+    /// Processes a single line: recognizes the command and executes it
+    pub(crate) fn process_line(&mut self, line: &str) -> Flow {
+        match Command::str_to_command(line) {
+            Ok(None) => Flow::Continue,
+            Ok(Some(command)) => self.execute(command),
+            Err(e) => {
+                println!("{e}");
+                Flow::Continue
+            }
+        }
+    }
+
+    pub(crate) fn is_load_running(&self) -> bool {
+        self.loading
+    }
+
+    pub(crate) fn set_load_running(&mut self, running: bool) {
+        self.loading = running;
+    }
+
+    pub(crate) fn require_fs(&mut self) -> Result<&mut FileSystem, FsError> {
         self.fs.as_mut().ok_or(FsError::NotFormatted)
     }
 }
