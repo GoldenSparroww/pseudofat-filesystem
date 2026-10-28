@@ -223,6 +223,24 @@ impl Dir {
         self.slots[index] = None;
         self.save_slot(disk, index)
     }
+
+    /// Overwrites the entry `name` with `entry` in the same slot (rename, update of `..`)
+    pub fn replace(&mut self, disk: &mut Disk, name: &Name, entry: DirEntry) -> Result<(), FsError> {
+        if entry.name != *name && self.find(&entry.name).is_some() {
+            return Err(FsError::FileExist);
+        }
+
+        let Some(index) = self
+            .slots
+            .iter()
+            .position(|slot| slot.as_ref().is_some_and(|slot_entry| slot_entry.name == *name))
+        else {
+            return Err(FsError::PathNotFound);
+        };
+
+        self.slots[index] = Some(entry);
+        self.save_slot(disk, index)
+    }
 }
 
 impl Dir {

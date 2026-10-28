@@ -140,9 +140,9 @@ fn run_fs_command(fs: &mut FileSystem, command: Command) -> Result<Output, Comma
         Command::Cp { src, dst } => fs.do_cp(&src, &dst),
         Command::Incp { host_src, dst } => fs.do_incp(&host_src, &dst),
         Command::Outcp { src, host_dst } => fs.do_outcp(&src, &host_dst),
-        /*Command::Mv { src, dst } => fs.mv(&src, &dst).map(|()| Output::Ok),
-        Command::Rm { path } => fs.rm(&path).map(|()| Output::Ok),
-        Command::Info { path } => fs.info(&path).map(Output::Lines),*/
+        Command::Mv { src, dst } => fs.do_mv(&src, &dst),
+        Command::Rm { path } => fs.do_rm(&path),
+        Command::Info { path } => fs.do_info(&path),
         /*Command::Check => fs.check().map(Output::Lines),
         Command::Bug { path, kind } => fs.bug(&path, kind).map(|done| Output::Lines(vec![format!("OK ({done})")])),*/
         // Shell::execute should run these before

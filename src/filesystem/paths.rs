@@ -4,7 +4,6 @@ use crate::filesystem::{
     fat::FATPtrEntry,
 };
 
-// TODO, reorganize functions into less specific types
 impl FileSystem {
     pub fn get_dir_cluster_from_path(&self, path: &str) -> Result<u32, FsError> {
         let (cluster, last_part) = self.walk(path)?;
@@ -15,18 +14,65 @@ impl FileSystem {
         }
     }
 
+    /// Cuts off the dir from `get_file_from_path`
     pub fn get_file_entry_from_path(&self, path: &str) -> Result<DirEntry, FsError> {
+        self.get_file_from_path(path).map(|(_, entry)| entry)
+    }
+
+    /// Returns the directory containing the file with its DirEntry
+    pub fn get_file_from_path(&self, path: &str) -> Result<(Dir, DirEntry), FsError> {
         let not_found = |_| FsError::FileNotFound;
 
         let (parent, Some(name)) = self.walk(path).map_err(not_found)? else {
             return Err(FsError::FileNotFound); // `/`, `.`, `..` jsou adresáře
         };
         let name = Name::from_str(name).map_err(not_found)?;
+        let parent = self.get_dir(parent)?;
 
-        match self.get_dir(parent)?.find(&name) {
-            Some(entry @ DirEntry { kind: DirEntryKind::File { .. }, .. }) => Ok(*entry),
+        match parent.find(&name) {
+            Some(entry @ DirEntry { kind: DirEntryKind::File { .. }, .. }) => {
+                let entry = *entry;
+                Ok((parent, entry))
+            }
             _ => Err(FsError::FileNotFound),
         }
+    }
+
+    /// Finds a file or a directory. Returns its parent directory and its entry.
+    pub fn get_parent_dir_and_node_from_path(&self, path: &str) -> Result<Option<(Dir, DirEntry)>, FsError> {
+        match self.get_file_from_path(path) {
+            Err(FsError::FileNotFound) => {}
+            other => return other.map(Some),
+        }
+
+        // mv wants FileNotFound
+        let cluster = self.get_dir_cluster_from_path(path).map_err(|e| match e {
+            FsError::PathNotFound | FsError::InvalidFileName(_) => FsError::FileNotFound,
+            e => e,
+        })?;
+
+        // The root has no entry (no parent), so it is `None`
+        if cluster == self.superblock.root_cluster {
+            return Ok(None);
+        }
+        self.dir_of(cluster).map(Some)
+    }
+
+    /// Is directory `cluster` equal to `ancestor` or somewhere below it?
+    pub fn is_dir_inside(&self, cluster: u32, ancestor: u32) -> Result<bool, FsError> {
+        let mut current = cluster;
+
+        for _ in 0..self.superblock.cluster_count {
+            if current == ancestor {
+                return Ok(true);
+            }
+            if current == self.superblock.root_cluster {
+                return Ok(false);
+            }
+            current = self.get_parent_dir_cluster(current)?;
+        }
+
+        Err(FsError::Corrupted("cycle in directory tree".to_owned()))
     }
 
     pub fn get_parent_dir_cluster(&self, curr_cluster: u32) -> Result<u32, FsError> {

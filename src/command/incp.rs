@@ -12,7 +12,7 @@ impl FileSystem {
 
         let (mut parent, name) = self.get_parent_dir_and_name_from_path(dst_fs_path)?;
 
-        self.create_file(&mut parent, name, &data).map(|()| Output::Ok);
+        self.create_file(&mut parent, name, &data)?;
 
         Ok(Output::Ok)
     }

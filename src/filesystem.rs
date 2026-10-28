@@ -115,7 +115,7 @@ impl FileSystem {
     }
 }
 
-// Access functions
+// Access functions GENERAL
 impl FileSystem {
     pub fn set_cwd(&mut self, cwd_cluster: u32) {
         self.cwd = cwd_cluster
@@ -125,10 +125,55 @@ impl FileSystem {
         self.cwd
     }
 
-    pub fn get_root(&self) -> u32 {
+    pub fn get_root_cluster(&self) -> u32 {
         self.superblock.root_cluster
     }
 
+    pub fn get_cluster_size(&self) -> u32 {
+        self.superblock.cluster_size
+    }
+
+    /// Moves `entry` from `parent` into `target` under the name `name`. Data is not copied.
+    pub fn move_entry(
+        &mut self,
+        parent_dir: &mut Dir,
+        entry: &DirEntry,
+        target_dir: &mut Dir,
+        name: Name,
+    ) -> Result<(), FsError> {
+        let new_entry = DirEntry { name, ..*entry };
+
+        // Rename in the same directory: overwrite the slot (works even if the directory is full).
+        if parent_dir.get_cluster() == target_dir.get_cluster() {
+            return parent_dir.replace(&mut self.disk, &entry.name, new_entry);
+        }
+
+        // When moving a directory, rewrite the `..` so that it points to the new parent. file => do nothing
+        // Keep moved_dir data cluster to rewire its .. later
+        let moved_dir = match entry.kind {
+            DirEntryKind::Dir => Some(
+                self.get_dir_cluster(entry)
+                    .ok_or_else(|| FsError::Corrupted(format!("directory {} has no cluster", entry.name)))?,
+            ),
+            DirEntryKind::File { .. } => None,
+        };
+
+        // Order: new entry, removal of the old one, `..` last.
+        target_dir.insert(&mut self.disk, new_entry)?;
+        parent_dir.remove(&mut self.disk, &entry.name)?;
+
+        // Perform a rewire of ..
+        if let Some(cluster) = moved_dir {
+            let new_dotdot = DirEntry::dir(Name::DOTDOT, target_dir.get_cluster());
+            self.get_dir(cluster)?.replace(&mut self.disk, &Name::DOTDOT, new_dotdot)?;
+        }
+
+        Ok(())
+    }
+}
+
+// Access functions DIR
+impl FileSystem {
     pub fn get_dir(&self, cluster: u32) -> Result<Dir, FsError> {
         Dir::get(&self.disk, &self.superblock, cluster)
     }
@@ -148,6 +193,17 @@ impl FileSystem {
         self.fat.free_chain(&mut self.disk, entry.start)
     }
 
+    /// Cluster of a directory; `None` for a file (or a corrupted directory entry)
+    pub fn get_dir_cluster(&self, entry: &DirEntry) -> Option<u32> {
+        match (entry.kind, entry.start) {
+            (DirEntryKind::Dir, FATPtrEntry::Next(cluster)) => Some(cluster),
+            _ => None,
+        }
+    }
+}
+
+// Access functions FILE
+impl FileSystem {
     pub fn create_file(&mut self, parent_dir: &mut Dir, name: Name, data: &[u8]) -> Result<(), FsError> {
         if data.len() as u64 > MAX_DISK_SIZE {
             return Err(FsError::DiskFull);
@@ -194,8 +250,22 @@ impl FileSystem {
         }
         Ok(data)
     }
+
+    pub fn remove_file(&mut self, parent: &mut Dir, entry: &DirEntry) -> Result<(), FsError> {
+        // Validate the chain first, free_chain could fail only after the entry is already gone
+        self.fat.get_chain(entry.start)?;
+
+        // Order: entry first, then FAT.
+        parent.remove(&mut self.disk, &entry.name)?;
+        self.fat.free_chain(&mut self.disk, entry.start)
+    }
+
+    pub fn get_file_clusters(&self, entry: &DirEntry) -> Result<Vec<u32>, FsError> {
+        self.fat.get_chain(entry.start)
+    }
 }
 
+// Inner helpers
 impl FileSystem {
     /// Groups chain of clusters into (disk_offset, data_range) extents, clamping the last range to size.
     /// e.g. with cluster_size = 100, [4, 5, 9] and size = 250 give [(offset(4), 0..200), (offset(9), 200..250)].

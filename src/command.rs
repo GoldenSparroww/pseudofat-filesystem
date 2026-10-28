@@ -100,7 +100,6 @@ impl Command {
             ["format", size_raw] => Command::Format { size_raw: size_raw.to_string() },
             ["exit"] => Command::Exit,
             ["check"] => Command::Check,
-            // TODO
             /*
             ["bug", path] => Command::Bug { path: path.to_string(), kind: None },
             ["bug", path, kind] => Command::Bug {
