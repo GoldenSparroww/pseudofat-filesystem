@@ -6,10 +6,11 @@ mod fat;
 mod paths;
 mod superblock;
 
+use std::ops::Range;
 use std::path::Path;
 use std::{fmt, io};
 
-use crate::config::CLUSTER_SIZE;
+use crate::config::{CLUSTER_SIZE, MAX_DISK_SIZE};
 use crate::filesystem::dir::{Dir, Name};
 use crate::filesystem::disk::Disk;
 use crate::filesystem::fat::{FAT, FATPtrEntry};
@@ -37,6 +38,11 @@ pub enum FsError {
     DiskFull,
     DirFull,
     FileExist,
+    HostFileNotFound,
+    HostFileReadGeneralError,
+    HostFileExists,
+    HostFileWriteGeneralError,
+    FileNotFound,
 }
 
 impl From<io::Error> for FsError {
@@ -57,6 +63,11 @@ impl fmt::Display for FsError {
             FsError::DiskFull => write!(f, "Disk is full."),
             FsError::DirFull => write!(f, "Directory is full."),
             FsError::FileExist => write!(f, "File exists."),
+            FsError::HostFileNotFound => write!(f, "Host file not found."),
+            FsError::HostFileReadGeneralError => write!(f, "An error occured during file read on host."),
+            FsError::HostFileExists => write!(f, "File exists on host."),
+            FsError::HostFileWriteGeneralError => write!(f, "An error occured during file write on host."),
+            FsError::FileNotFound => write!(f, "FILE NOT FOUND"),
         }
     }
 }
@@ -135,5 +146,71 @@ impl FileSystem {
         let (mut parent, entry) = self.dir_of(cluster)?;
         parent.remove(&mut self.disk, &entry.name)?;
         self.fat.free_chain(&mut self.disk, entry.start)
+    }
+
+    pub fn create_file(&mut self, parent_dir: &mut Dir, name: Name, data: &[u8]) -> Result<(), FsError> {
+        if data.len() as u64 > MAX_DISK_SIZE {
+            return Err(FsError::DiskFull);
+        }
+        let size = u32::try_from(data.len()).map_err(|_| FsError::DiskFull)?;
+
+        // Order of entries: dir full?, FAT, data, and finally the directory entry.
+
+        parent_dir.is_insert_possible(&name)?;
+
+        let count = size.div_ceil(CLUSTER_SIZE);
+        let clusters = self.fat.allocate(&mut self.disk, count as usize)?;
+
+        for (offset, range) in self.file_to_extents(&clusters, data.len()) {
+            self.disk.write_at(offset, &data[range])?;
+        }
+
+        let start = match clusters.first() {
+            Some(&first) => FATPtrEntry::Next(first),
+            // An empty file has no clusters
+            None => FATPtrEntry::EOF,
+        };
+
+        parent_dir.insert(&mut self.disk, DirEntry::file(name, size, start))
+    }
+
+    pub fn read_file(&self, entry: &DirEntry) -> Result<Vec<u8>, FsError> {
+        let DirEntryKind::File { size } = entry.kind else {
+            return Err(FsError::FileNotFound);
+        };
+
+        let clusters = self.fat.get_chain(entry.start)?;
+        let needed = (size as usize).div_ceil(self.superblock.cluster_size as usize);
+        if clusters.len() != needed {
+            return Err(FsError::Corrupted(format!(
+                "size {size} B needs {needed} clusters, chain has {}",
+                clusters.len()
+            )));
+        }
+
+        let mut data = vec![0u8; size as usize];
+        for (offset, range) in self.file_to_extents(&clusters, data.len()) {
+            self.disk.read_at(offset, &mut data[range])?;
+        }
+        Ok(data)
+    }
+}
+
+impl FileSystem {
+    /// Groups chain of clusters into (disk_offset, data_range) extents, clamping the last range to size.
+    /// e.g. with cluster_size = 100, [4, 5, 9] and size = 250 give [(offset(4), 0..200), (offset(9), 200..250)].
+    fn file_to_extents(&self, clusters: &[u32], size: usize) -> Vec<(u64, Range<usize>)> {
+        let cluster_size = self.superblock.cluster_size as usize;
+        let mut extents: Vec<(u64, Range<usize>)> = Vec::new();
+        let mut start = 0;
+
+        for contiguous in clusters.chunk_by(|&a, &b| b == a + 1) {
+            // min() ensures perfect byte alignment for last cluster for caller's indexing in data bytes
+            let end = (start + contiguous.len() * cluster_size).min(size);
+            extents.push((self.superblock.cluster_real_byte_offset(contiguous[0]), start..end));
+            start = end;
+        }
+
+        extents
     }
 }

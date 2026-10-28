@@ -130,7 +130,7 @@ impl FAT {
     /// Iterates through the string starting at `first` and returns the numbers of its clusters in order
     /// <br> **NOTE**: I have to pass a sort of “artificial” reference to `first`, i.e., `FATEntry::Next(first)`, otherwise
     /// the first cluster would be omitted.
-    pub fn chain(&self, first: FATPtrEntry) -> Result<Vec<u32>, FsError> {
+    pub fn get_chain(&self, first: FATPtrEntry) -> Result<Vec<u32>, FsError> {
         let mut clusters = Vec::new();
         let mut current = first;
 
@@ -156,7 +156,7 @@ impl FAT {
     }
 
     pub fn free_chain(&mut self, disk: &mut Disk, first: FATPtrEntry) -> Result<(), FsError> {
-        let chain_of_clusters = self.chain(first)?;
+        let chain_of_clusters = self.get_chain(first)?;
 
         for &cluster in &chain_of_clusters {
             self.ptr_entries[cluster as usize] = RAW_FREE;

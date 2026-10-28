@@ -136,23 +136,14 @@ fn run_fs_command(fs: &mut FileSystem, command: Command) -> Result<Output, Comma
         Command::Ls { path } => fs.do_ls(path.as_deref()),
         Command::Mkdir { path } => fs.do_mkdir(&path),
         Command::Rmdir { path } => fs.do_rmdir(&path),
-        /*Command::Cp { src, dst } => fs.cp(&src, &dst).map(|()| Output::Ok),
-        Command::Mv { src, dst } => fs.mv(&src, &dst).map(|()| Output::Ok),
+        Command::Cat { path } => fs.do_cat(&path),
+        Command::Cp { src, dst } => fs.do_cp(&src, &dst),
+        Command::Incp { host_src, dst } => fs.do_incp(&host_src, &dst),
+        Command::Outcp { src, host_dst } => fs.do_outcp(&src, &host_dst),
+        /*Command::Mv { src, dst } => fs.mv(&src, &dst).map(|()| Output::Ok),
         Command::Rm { path } => fs.rm(&path).map(|()| Output::Ok),
-        Command::Cat { path } => {
-            let data = fs.read_file(&path)?;
-            Ok(Output::RawText(String::from_utf8_lossy(&data).into_owned()))
-        }
-        Command::Info { path } => fs.info(&path).map(Output::Lines),
-        Command::Incp { host_src, dst } => {
-            let data = host::read_file(&parse_host_path(&host_src))?;
-            fs.create_file(&dst, &data).map(|()| Output::Ok)
-        }
-        Command::Outcp { src, host_dst } => {
-            let data = fs.read_file(&src)?;
-            host::write_file(&parse_host_path(&host_dst), &data).map(|()| Output::Ok)
-        }
-        Command::Check => fs.check().map(Output::Lines),
+        Command::Info { path } => fs.info(&path).map(Output::Lines),*/
+        /*Command::Check => fs.check().map(Output::Lines),
         Command::Bug { path, kind } => fs.bug(&path, kind).map(|done| Output::Lines(vec![format!("OK ({done})")])),*/
         // Shell::execute should run these before
         Command::Load { .. } | Command::Format { .. } | Command::Exit => {

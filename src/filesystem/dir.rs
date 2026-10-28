@@ -104,9 +104,9 @@ impl DirEntry {
         DirEntry { name, kind: DirEntryKind::Dir, start: FATPtrEntry::Next(cluster) }
     }
 
-    /*pub fn file(name: Name, size: u32, start: FATPtrEntry) -> DirEntry {
+    pub fn file(name: Name, size: u32, start: FATPtrEntry) -> DirEntry {
         DirEntry { name, kind: DirEntryKind::File { size }, start }
-    }*/
+    }
 
     fn to_bytes(&self) -> [u8; DIR_ENTRY_SIZE] {
         let mut bytes = [0u8; DIR_ENTRY_SIZE];

@@ -15,6 +15,20 @@ impl FileSystem {
         }
     }
 
+    pub fn get_file_entry_from_path(&self, path: &str) -> Result<DirEntry, FsError> {
+        let not_found = |_| FsError::FileNotFound;
+
+        let (parent, Some(name)) = self.walk(path).map_err(not_found)? else {
+            return Err(FsError::FileNotFound); // `/`, `.`, `..` jsou adresáře
+        };
+        let name = Name::from_str(name).map_err(not_found)?;
+
+        match self.get_dir(parent)?.find(&name) {
+            Some(entry @ DirEntry { kind: DirEntryKind::File { .. }, .. }) => Ok(*entry),
+            _ => Err(FsError::FileNotFound),
+        }
+    }
+
     pub fn get_parent_dir_cluster(&self, curr_cluster: u32) -> Result<u32, FsError> {
         let dir = self.get_dir(curr_cluster)?;
 

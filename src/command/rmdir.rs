@@ -2,7 +2,7 @@
 
 use crate::{
     command::{CommandExecError, Output},
-    filesystem::{FileSystem, FsError},
+    filesystem::{FileSystem},
 };
 
 impl FileSystem {

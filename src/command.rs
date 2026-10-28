@@ -2,12 +2,19 @@ use std::fmt;
 
 use crate::filesystem::FsError;
 
+pub mod cat;
 pub mod cd;
+pub mod cp;
 pub mod format;
+pub mod incp;
 pub mod ls;
 pub mod mkdir;
+pub mod mv;
+pub mod outcp;
 pub mod pwd;
+pub mod rm;
 pub mod rmdir;
+pub mod info;
 
 // ===== Command definitions ======
 
