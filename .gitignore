@@ -26,3 +26,8 @@ rustc-ice-*.txt
 # Manually added
 tmp
 dist
+docs/*/*.log
+docs/*/*.aux
+docs/*/*.out
+docs/*/*.synctex.gz
+docs/*/*.toc

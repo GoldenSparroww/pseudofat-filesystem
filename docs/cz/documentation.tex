@@ -1,0 +1,523 @@
+\documentclass[10pt, a4paper]{report}
+
+\usepackage[utf8]{inputenc}
+\usepackage[czech]{babel}
+\usepackage{csquotes}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+
+\usepackage{float}
+\usepackage{caption}
+\usepackage{nameref}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
+\usepackage{titlesec}
+\usepackage[
+left=30mm,
+right=30mm,
+top=40mm,
+bottom=30mm,
+]{geometry}
+\usepackage{todonotes}
+\usepackage{array}
+\usepackage{listings}
+\usepackage{xcolor}
+
+% Kapitoly bez velkého záhlaví "Kapitola N"
+\titleformat{\chapter}{\normalfont\huge\bfseries}{\thechapter}{1em}{}
+\titlespacing*{\chapter}{0pt}{0pt}{20pt}
+
+% Kód (jen ASCII, listings s pdflatexem neumí UTF-8)
+\lstset{
+	basicstyle=\ttfamily\small,
+	columns=fullflexible,
+	keepspaces=true,
+	frame=single,
+	framerule=0.3pt,
+	rulecolor=\color{gray},
+	xleftmargin=2mm,
+	xrightmargin=2mm,
+	showstringspaces=false,
+	breaklines=true,
+}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\begin{document}
+	\sloppy % dlouhe nazvy v \code{} jinak pretekaji okraj
+	
+	\pagenumbering{arabic}
+	\thispagestyle{empty}
+	
+	\begin{titlepage}
+		\centering
+		
+		{\Large KIV/ZOS -- Základy operačních systémů} \\[0.5cm]
+		{\Large Semestrální práce} \\[2.5cm]
+		
+		{\huge \bfseries PseudoFAT} \\[0.3cm]
+		{\Large Zjednodušený souborový systém založený na FAT} \\[0cm]
+		
+		\vfill
+		
+		\begin{flushleft} \small
+			Jméno: Jan Kopačka \\
+			Osobní číslo: A24B0346P  \\
+			Email: jankop@students.zcu.cz \\
+			Datum: \today
+		\end{flushleft}
+		
+	\end{titlepage}
+	
+	\setcounter{page}{2}
+	
+	\tableofcontents
+	\newpage
+	
+	% =====================================================================
+	\chapter{Úvod}
+	
+	\section{Účel projektu}
+	
+	Program implementuje zjednodušený souborový systém založený na FAT. Je napsaný v Rustu, což bylo pro tuto práci povoleno i přes požadavky zadání. Celý systém je
+	uložený v jednom souboru na hostitelském disku a jeho obsah zůstává zachovaný mezi spuštěními.
+	Program se spouští s jedním parametrem, cestou k tomuto souboru:
+	
+	\begin{lstlisting}
+pseudofat myfs.dat
+	\end{lstlisting}
+	
+	Ovládá se příkazy ze zadání (\code{format}, \code{mkdir}, \code{incp}, \code{cat} apod.)
+	zadávanými na standardní vstup. Podle loginu (\code{jankop}) jsou navíc implementované příkazy
+	\code{check} (kontrola konzistence) a \code{bug} (záměrné poškození). Úplné znění zadání je v repozitáři v~\code{docs/cz/Zadani.pdf}.
+	
+	Výstupy \code{OK}, textové výstupy (\code{ls}, \code{pwd}, \code{cat}, \code{info},
+	\code{check}) a chyby parsování jdou na \code{stdout}. Chyby příkazů (\code{FILE NOT FOUND},
+	\code{PATH NOT FOUND}, \code{EXIST}, \dots) jdou na \code{stderr}.
+	
+	Sestavení a spuštění zajišťuje \code{Makefile}: \code{make build} (release binárka do
+	\code{dist/}), \code{make run}, \code{make test}, \code{make clean}.
+	
+	\section{Adresářová struktura}
+	
+	\begin{lstlisting}
+Cargo.toml, Makefile
+src/
+  main.rs          vstupni bod, zpracovani argumentu
+  shell.rs         smycka cteni prikazu, volani prikazu, vypis vysledku
+  command.rs       parser prikazu (Command), Output, CommandExecError
+  command/         jeden soubor = jeden prikaz (cat.rs, cp.rs, ..., load.rs)
+  filesystem.rs    struktura FileSystem, FsError, operace se soubory
+  filesystem/
+    superblock.rs  superblok: rozlozeni disku, validace pri otevreni
+    fat.rs         FAT tabulka: alokace, retezce, uvolnovani
+    dir.rs         adresare a jejich polozky, jmena 8.3
+    paths.rs       preklad cest
+    consistency.rs logika pro prikazy check a bug
+    disk.rs        nejnizsi vrstva: cteni/zapis bajtu na offsetu
+  host.rs          cteni/zapis souboru na hostitelskem disku
+  bytes.rs         serializace cisel (little-endian)
+  config.rs        konstanty (velikost clusteru, limity)
+  helpers.rs       pomocne funkce (varovani)
+tests/
+  integration.rs   integracni testy (spousti binarku, kontroluje vystup)
+docs/cz/           tato dokumentace
+	\end{lstlisting}
+	
+	\section{Architektura}
+	
+	Program je rozdělený do vrstev. Každá vrstva volá jen vrstvu pod sebou.
+	
+	\begin{table}[H]
+		\centering
+		\begin{tabular}{|l|l|p{6.2cm}|}
+			\hline
+			\textbf{vrstva} & \textbf{moduly} & \textbf{odpovědnost} \\ \hline
+			shell & \code{shell}, \code{command} & čte řádky, parsuje je na \code{Command}, volá příkaz a vypisuje výsledek \\ \hline
+			příkazy & \code{command/*} & tenké funkce \code{do\_*}: složí operace FS a převedou výsledek na \code{Output} \\ \hline
+			souborový systém & \code{filesystem}, \code{filesystem/*} & superblok, FAT, adresáře, překlad cest, check a bug \\ \hline
+			disk & \code{filesystem/disk} & čtení a zápis bajtů na daný offset souboru s FS \\ \hline
+		\end{tabular}
+	\end{table}
+	
+	Mimo tyto vrstvy stojí \code{host} (soubory na hostitelském disku pro \code{incp} a
+	\code{outcp}), \code{bytes} (převod čísel na bajty) a \code{config} (konstanty).
+	
+	Struktura \code{FileSystem} drží otevřený disk, načtený superblok, celou FAT v paměti a cluster
+	aktuálního adresáře. \code{Shell} drží \code{Option<FileSystem>}: \code{None} znamená
+	nezformátovaný disk, kdy funguje jen \code{format} a ostatní příkazy skončí chybou
+	\code{Disk is not formatted.}
+	
+	% =====================================================================
+	\chapter{Architektonická rozhodnutí}
+	
+	\section{Návrh}
+	
+	\subsection{Rozložení disku}
+	
+	\begin{table}[H]
+		\centering
+		\begin{tabular}{|l|l|l|}
+			\hline
+			\textbf{offset} & \textbf{oblast} & \textbf{velikost} \\ \hline
+			0 & superblok & 64 B \\ \hline
+			\code{fat\_start} & FAT & $N \times 4$ B \\ \hline
+			\code{data\_start} & clustery $0 \dots N-1$ (cluster 0 je kořen \code{/}) & $N \times 1024$ B \\ \hline
+			& nevyužitý zbytek & méně než 1028 B \\ \hline
+		\end{tabular}
+	\end{table}
+	
+	Počet clusterů je $N = \lfloor (\text{disk\_size} - 64) / (1024 + 4) \rfloor$, protože každý
+	cluster potřebuje 1024 B dat a 4 B ve FAT.
+	
+	Superblok (ve skutečném FAT nazývaný \enquote{boot sector}) popisuje celý disk. Program ho čte jako první
+	a vše ostatní zjistí z něj. Všechna čísla jsou little-endian.
+	
+	\begin{table}[H]
+		\centering
+		\begin{tabular}{|r|r|l|l|p{4.5cm}|}
+			\hline
+			\textbf{offset} & \textbf{velikost} & \textbf{pole} & \textbf{příklad (600 MiB)} & \textbf{význam} \\ \hline
+			0 & 8 B & \code{magic} & \code{PSEUDFAT} & poznání vlastního FS \\ \hline
+			8 & 4 B & \code{version} & 1 & pro budoucí změny formátu \\ \hline
+			12 & 4 B & \code{cluster\_size} & 1024 & \\ \hline
+			16 & 4 B & \code{cluster\_count} & 612 009 & $N$ \\ \hline
+			20 & 4 B & \code{root\_cluster} & 0 & cluster kořenového adresáře \\ \hline
+			24 & 8 B & \code{disk\_size} & 629 145 600 & kontrola proti skutečné délce souboru \\ \hline
+			32 & 8 B & \code{fat\_start} & 64 & začátek FAT \\ \hline
+			40 & 8 B & \code{data\_start} & 2 448 100 & začátek clusteru 0 \\ \hline
+			48 & 16 B & rezerva & nuly & \\ \hline
+		\end{tabular}
+	\end{table}
+	
+	Při otevření se ověří \code{magic} (jinak \enquote{nezformátováno}), \code{version},
+	shoda \code{disk\_size} s délkou souboru a nakonec se rozložení spočítá znovu ze
+	\code{disk\_size} a \code{cluster\_size} a musí se shodovat s uloženým. Poškozený superblok
+	se tak nepoužije.
+	
+	\subsection{FAT tabulka}
+	
+	FAT je pole \code{cluster\_count} čísel \code{u32} hned za superblokem. Položka $i$ říká, co
+	následuje po clusteru $i$:
+	
+	\begin{table}[H]
+		\centering
+		\begin{tabular}{|l|l|l|}
+			\hline
+			\textbf{hodnota na disku} & \textbf{\code{FATPtrEntry}} & \textbf{význam} \\ \hline
+			\code{u32::MAX} & \code{FREE} & cluster je volný \\ \hline
+			\code{u32::MAX - 1} & \code{EOF} & poslední cluster řetězce \\ \hline
+			\code{u32::MAX - 2} & \code{BAD} & vadný cluster (jen pro úplnost, viz níže) \\ \hline
+			cokoliv jiného & \code{Next(n)} & další cluster téhož souboru je $n$ \\ \hline
+		\end{tabular}
+	\end{table}
+	
+	\begin{itemize}
+		\item FAT ví jen to, že po clusteru 2 následuje cluster 3. Kde soubor začíná, ve FAT není:
+		první cluster je uložený v položce adresáře.
+		\item Skutečný FAT čísluje datové clustery od 2, protože hodnota \code{FREE} je tam 0.
+		Kdyby data mohla ležet v clusteru 0, znamenalo by \code{FAT[i] = 0} buď \enquote{volno},
+		nebo \enquote{další je cluster 0}. Tady jsou speciální hodnoty na konci rozsahu \code{u32},
+		takže se čísluje od 0. Z toho plyne i limit
+		\code{MAX\_CLUSTER\_COUNT = u32::MAX - 2}.
+		\item \code{BAD} je uvedená spíše pro úplnost. Zadání ji nevyžaduje a implementace ji plně
+		nevyužívá: žádný cluster se jako vadný neoznačuje, jen \code{get\_chain} odmítne řetězec,
+		který na \code{BAD} narazí.
+		\item Skutečný FAT drží dvě kopie tabulky jako zálohu. Tady je jen jedna.
+		\item Celá FAT je v paměti a každá změna se hned zapíše i na disk (write-through). Soubor
+		s FS je tak po každé operaci aktuální.
+	\end{itemize}
+	
+	\paragraph{Proč 32bitové položky.} FAT12 adresuje zhruba 4 080 clusterů, FAT16 zhruba
+	65 520, FAT32 (28 bitů z 32) zhruba 268 milionů. Disk 600 MiB s clustery po 1 KiB má
+	$600 \times 1024 = 614\,400$ clusterů (po odečtení režie zhruba 612 tisíc). To je víc, než
+	zvládne FAT16, takže pro malé 1 KiB clustery připadají v úvahu jen 32bitové položky.
+	Jedna FAT pak zabere $614\,400 \times 4\ \text{B} = 2\,457\,600\ \text{B} \approx 2{,}34$ MiB.
+	Velikost FAT závisí na velikosti clusteru:
+	
+	\begin{table}[H]
+		\centering
+		\begin{tabular}{|r|r|r|r|}
+			\hline
+			\textbf{cluster} & \textbf{clusterů na 600 MiB} & \textbf{1 tabulka} & \textbf{2 tabulky} \\ \hline
+			512 B & 1 228 800 & 4,69 MiB & 9,38 MiB \\ \hline
+			1 KiB (použito) & 614 400 & 2,34 MiB & 4,69 MiB \\ \hline
+			4 KiB (běžně FAT32) & 153 600 & 0,59 MiB & 1,17 MiB \\ \hline
+		\end{tabular}
+	\end{table}
+	
+	\subsection{Limity velikostí}
+	
+	\begin{itemize}
+		\item \code{size} v položce adresáře je \code{u32}, jeden soubor má tedy nejvýš zhruba
+		4 GiB. \code{cluster\_count} je také \code{u32}, ale omezuje celý disk
+		(až $4{,}29 \cdot 10^9 \times 1024\ \text{B} \approx 4{,}4$ TB). Jde o dvě nezávislé
+		veličiny se stejným stropem.
+		\item Počet clusterů souboru se neukládá, dopočítá se jako
+		$\lceil s / c \rceil$, kde $s$ je \code{size} a $c$ \code{cluster\_size}. Protože $c \ge 1$,
+		platí $\lceil s / c \rceil \le s$: v nejhorším
+		(cluster 1 B) jsou si rovny, jinak je clusterů méně. Když se \code{size} vejde do
+		\code{u32}, vejde se tam i počet clusterů souboru.
+		\item \code{MAX\_DISK\_SIZE = 4 GiB} je čistě vývojářský a testovací limit. Hlavně brání
+		tomu, aby překlep ve \code{format} při testování vytvořil obrovský soubor. Na správnost nemá
+		vliv: přetečení počtu clusterů hlídá \code{MAX\_CLUSTER\_COUNT} při vytváření superbloku
+		a velikost souboru převod na \code{u32} v \code{create\_file}. Zadání požaduje 10--600 MB.
+		\item \code{MIN\_CLUSTER\_SIZE = 512} B a podmínka mocniny dvou jsou pojistky spíš pro
+		programátora, kdyby měnil \code{CLUSTER\_SIZE}. Používá se \code{CLUSTER\_SIZE = 1024} B.
+	\end{itemize}
+	
+	\subsection{Adresáře}
+	
+	Adresář zabírá vždy právě jeden cluster (ve FAT má \code{EOF}, velikost 0) a nedá se zvětšovat.
+	Cluster je rozdělený na sloty po 32 B. Každý slot je buď volný (samé nuly), nebo obsahuje
+	položku:
+	
+	\begin{table}[H]
+		\centering
+		\begin{tabular}{|r|r|l|p{8cm}|}
+			\hline
+			\textbf{offset} & \textbf{velikost} & \textbf{pole} & \textbf{význam} \\ \hline
+			0 & 12 B & \code{name} & 8 B jméno + 3 B přípona + \code{\textbackslash 0}, kratší části doplněné nulami (zadání: 12 B, formát 8.3) \\ \hline
+			12 & 1 B & \code{kind} & 0 = volný slot, 1 = soubor, 2 = adresář (bajty 13--15 jsou nuly) \\ \hline
+			16 & 4 B & \code{size} & velikost v bajtech; pro \code{info} a pro určení, kolik dat posledního clusteru je platných \\ \hline
+			20 & 4 B & \code{start} & položka FAT: číslo prvního clusteru, nebo \code{EOF} (prázdný soubor) \\ \hline
+			24 & 8 B & rezerva & \\ \hline
+		\end{tabular}
+	\end{table}
+	
+	Kapacita adresáře je $1024 / 32 - 2 = 30$ položek. Sloty 0 a 1 jsou \code{.} (odkaz na sebe) a
+	\code{..} (odkaz na rodiče). Skutečný FAT je v kořeni nemá. Tady je má i kořen a jeho \code{..}
+	ukazuje na něj samotného, takže \code{cd ..} v kořeni zůstane v kořeni. Uložení \code{.} a \code{..}
+	stojí 2 sloty z 32, ale \code{cd ..} je pak jen čtení položky, \code{pwd} jde složit
+	procházením nahoru a není potřeba držet cestu v paměti jako zásobník.
+	
+	\subsection{Překlad cesty}
+	\label{sec:walk}
+	
+	Každý příkaz s cestou začíná stejně: z textu jako \code{../docs/./s1.txt} je potřeba najít
+	položku.
+	\begin{enumerate}
+		\item Pokud cesta začíná \code{/}, začne se v kořeni, jinak v aktuálním adresáři.
+		\item Cesta se rozdělí podle \code{/}, prázdné části (\code{a//b}, \code{a/}) se ignorují.
+		\item Pro každou mezilehlou část: \code{.} znamená zůstat, \code{..} přejít do rodiče.
+		Jakékoliv jiné jméno musí existovat a být adresář, jinak \code{PATH NOT FOUND}.
+	\end{enumerate}
+	
+	Funkce \code{walk} projde smyčkou jen mezilehlé části a vrátí rodičovský adresář a poslední část
+	jako \code{Option<\&str>}. Poslední část se odřízne, protože se na ni nesmí použít pravidlo
+	\enquote{musí existovat a být adresář}: je to cíl operace a jeho pravidla určuje příkaz.
+	
+	\begin{table}[H]
+		\centering
+		\begin{tabular}{|l|l|l|}
+			\hline
+			\textbf{konec cesty} & \textbf{co to je} & \textbf{\code{walk} vrátí jako poslední část} \\ \hline
+			\code{.../b}, \code{b} je adresář & existující adresář & \code{Some("b")} \\ \hline
+			\code{.../f.txt}, \code{f.txt} je soubor & existující soubor & \code{Some("f.txt")} \\ \hline
+			\code{.../new}, \code{new} neexistuje & nová položka (\code{mkdir}, \code{incp}) & \code{Some("new")} \\ \hline
+			\code{.../.} nebo \code{.../..} & navigace & \code{None} (vyřešeno ve smyčce) \\ \hline
+			\code{/} nebo prázdná cesta & kořen & \code{None} \\ \hline
+		\end{tabular}
+	\end{table}
+	
+	\code{walk} nerozhoduje mezi prvními třemi případy. Volající zpracuje poslední část jedním ze
+	dvou způsobů:
+	\begin{itemize}
+		\item \textbf{najdi existující} (\code{cat}, \code{rm}, \code{cd}, \code{ls}, \code{info},
+		zdroj u \code{cp}, \code{mv}, \code{outcp}): položka musí existovat a mít správný typ,
+		\item \textbf{rozděl na rodiče a nové jméno} (\code{mkdir}, cíl u \code{cp}, \code{mv},
+		\code{incp}): rodič musí existovat (jinak \code{PATH NOT FOUND}), jméno v něm ještě nesmí
+		být (jinak \code{EXIST}) a musí splňovat formát 8.3.
+	\end{itemize}
+	
+	\subsection{Pořadí zápisů a operace}
+	
+	Obecné pravidlo: při vytváření se zapíšou data, potom FAT a jako poslední položka adresáře. Při
+	mazání se nejdřív odstraní položka a pak se uvolní FAT. Když program spadne uprostřed, nejhorší
+	výsledek jsou obsazené clustery, na které nic neukazuje (ztracené clustery). To je jen ztráta
+	místa. Při opačném pořadí by mohla zůstat položka ukazující na volné clustery, ty by pak přepsal
+	jiný soubor a data dvou souborů by se smíchala.
+	
+	\paragraph{\code{incp s1 s2}} (\code{cp} funguje stejně, jen čte data z našeho FS):
+	\begin{enumerate}
+		\item Načte zdroj, jinak \code{FILE NOT FOUND}.
+		\item Rozdělí cíl na rodiče a jméno (\code{PATH NOT FOUND}, \code{EXIST}, neplatné jméno).
+		\item Ověří, že má rodič volný slot, jinak \code{Directory is full.}
+		\item Ověří, že je volných $\lceil \text{size} / 1024 \rceil$ clusterů. Kontroluje se
+		předem, aby nezůstal napůl zapsaný soubor.
+		\item Zapíše data do volných clusterů (poslední bývá zaplněný jen částečně).
+		\item Zřetězí je ve FAT: \code{FAT[c1] = c2}, \dots, \code{FAT[ck] = EOF}.
+		\item Zapíše položku do rodiče.
+	\end{enumerate}
+	
+	\paragraph{\code{rm s1}:} najde položku (musí to být soubor), odstraní ji z rodiče (vynuluje
+	slot) a každý cluster řetězce nastaví na \code{FREE}. Data se při mazání nepřepisují, původní
+	bajty v clusterech zůstanou, dokud je něco nepřepíše (na tom stojí nástroje pro obnovu
+	smazaných souborů).
+	
+	\paragraph{\code{mkdir a1}:} rozdělí cestu na rodiče a jméno (stejné kontroly jako u
+	\code{incp}), najde 1 volný cluster, nastaví \code{FAT[c] = EOF}, zapíše do clusteru \code{.}
+	a \code{..} a nakonec položku do rodiče.
+	
+	\paragraph{\code{rmdir a1}:} najde adresář, který nesmí být kořen ani aktuální adresář (předek
+	aktuálního adresáře neprojde, protože není prázdný). Kromě \code{.} a \code{..} musí být prázdný,
+	jinak \code{NOT EMPTY}. Odstraní položku z rodiče a nastaví \code{FAT[c] = FREE}.
+	
+	\paragraph{\code{mv s1 s2}:} přesouvá se jen položka adresáře. Ze starého rodiče se odstraní a
+	do nového se zapíše s novým jménem. Data ani FAT se nemění, takže přesun 500MB souboru trvá
+	stejně dlouho jako přesun 1 B. Přejmenování je \code{mv} v rámci jednoho adresáře. U adresáře se
+	navíc přepíše jeho \code{..} a je zakázaný přesun adresáře do sebe sama. \code{s2} je vždy
+	úplná cílová cesta včetně jména, \code{mv a.txt dir} tedy při existujícím \code{dir} skončí
+	\code{EXIST}.
+	
+	\subsection{check a bug}
+	
+	\code{check} projde strom adresářů od kořene a u každého souboru ověří neplatné číslo clusteru,
+	cyklus v řetězci a nesoulad \code{size} s délkou řetězce. Každý problém vypíše na jeden řádek
+	s cestou k souboru, bez problémů vypíše \code{OK}.
+	
+	\code{bug s1 [size|cycle|invalid]} poškodí soubor \code{s1}:
+	
+	\begin{table}[H]
+		\centering
+		\begin{tabular}{|l|p{5.5cm}|p{5cm}|}
+			\hline
+			\textbf{druh} & \textbf{co udělá} & \textbf{kdy jde použít} \\ \hline
+			\code{size} & změní velikost v položce o jeden cluster & vždy \\ \hline
+			\code{cycle} & poslední cluster nasměruje na první & soubor má aspoň 1 cluster a nepoškozený řetězec \\ \hline
+			\code{invalid} & poslední cluster nasměruje na číslo mimo rozsah & soubor má aspoň 1 cluster a nepoškozený řetězec \\ \hline
+		\end{tabular}
+	\end{table}
+	
+	Bez druhého argumentu se druh vybere náhodně jen z druhů použitelných na daný soubor, takže
+	opakované \code{bug s1} nikdy neselže kvůli nepoužitelné volbě. Náhoda bere nanosekundy
+	systémového času, bez externí knihovny. \code{bug} lze volat opakovaně na různé soubory a
+	\code{check} pak nahlásí všechna poškození.
+	
+	Poškozený soubor nejde smazat: \code{rm} napřed ověřuje řetězec, takže soubor s cyklem nebo
+	neplatným clusterem skončí chybou. Jediná cesta zpět je \code{format}.
+	
+	\subsection{load}
+	
+	Skript pro \code{load} musí ležet v našem FS, nejdřív se tam tedy musí zkopírovat přes
+	\code{incp}. Bez zformátovaného FS tak nefunguje nic kromě \code{format}. Chyba jednoho
+	příkazu nezastaví zbytek skriptu. \code{exit} ve skriptu ukončí celý program. Vnořený
+	\code{load} je zakázaný, protože skript načítající sám sebe by nikdy neskončil.
+	
+	\subsection{MiB a MB}
+	
+	Zadání uvádí velikost v MB (\code{format 600MB}). Program jednotku chápe jako mocninu dvou,
+	tj. MiB: \code{600MB} vytvoří disk $600 \times 1024^2$ B. Správně by se tedy mělo psát MiB,
+	zadání to tak ale nepíše a vyžaduje zápis \code{MB}. Proto se v textu i programu používá
+	\code{MB}, přestože jde o MiB.
+	
+	\subsection{Multiplatformnost}
+	
+	Program funguje na Windows i Linuxu:
+	\begin{itemize}
+		\item všechna čísla na disku jsou natvrdo little-endian, soubor s FS je tak stejný na
+		každé platformě (nezávisí na pořadí bajtů procesoru),
+		\item argumenty a cesty se čtou jako \code{OsString}/\code{PathBuf} (Linux UTF-8,
+		Windows UTF-16),
+		\item konce řádků LF i CRLF se zpracují stejně (vstup i skripty pro \code{load}),
+		\item výzva \code{pseudofat>} se vypisuje jen při čtení z terminálu, ne z roury,
+		\item \code{Makefile} rozlišuje Windows a ostatní systémy.
+	\end{itemize}
+	
+	% ---------------------------------------------------------------------
+	\section{Implementace}
+	
+	\subsection{Příkazy jako \code{do\_*}}
+	
+	Každý příkaz je v samostatném souboru \code{command/<jméno>.rs} jako funkce \code{do\_<jméno>}
+	v bloku \code{impl FileSystem}. Výjimky jsou dvě. \code{format} je volná funkce, protože pracuje i
+	bez otevřeného FS. \code{load} je v bloku \code{impl Shell}, protože na rozdíl od ostatních
+	příkazů vykonává další příkazy a víc spolupracuje se shellem (viz \ref{sec:pubcrate}). Logika, která potřebuje privátní pole \code{disk} a \code{fat}, je v
+	\code{filesystem.rs} nebo jeho podmodulech (\code{paths.rs}, \code{consistency.rs}), protože
+	podmodul vidí privátní pole rodiče. Příkazy pak jen skládají tyto operace.
+	
+	\subsection{Umělé \code{Next} v \code{get\_chain}}
+	
+	\code{get\_chain(first: FATPtrEntry)} nebere číslo clusteru, ale položku FAT. Pole
+	\code{start} v položce adresáře je uložené jako \code{FATPtrEntry}: neprázdný soubor má
+	\code{Next(první cluster)}, prázdný \code{EOF}. \code{get\_chain} pak se startem zachází jako
+	s \enquote{ukazatelem na první cluster} a vrací \emph{všechny} clustery včetně prvního. Kdyby
+	brala přímo první cluster, první by se vynechal nebo by se musel řešit zvlášť. Prázdný soubor
+	dá bez zvláštní větve prázdný řetězec. Proto i \code{DirEntry::dir} zabaluje cluster adresáře do
+	\code{Next}.
+	
+	\begin{lstlisting}
+let clusters = self.fat.get_chain(entry.start)?;   
+// start = Next(2) -> [2, 3, 4, 7, 10]
+	\end{lstlisting}
+	
+	\subsection{\code{pub(crate)} v \code{shell.rs}}
+	\label{sec:pubcrate}
+	
+	Z funkcí, které vykonávají příkazy (\code{run}, \code{execute}, \code{process\_line}), je
+	\code{process\_line} jediná \code{pub(crate)}. Spolu s ní jsou \code{pub(crate)} i \code{Flow},
+	\code{require\_fs}, \code{is\_load\_running} a \code{set\_load\_running}. Důvod: každý příkaz
+	má být v samostatném souboru, ale \code{load} jako jediný potřebuje vnitřnosti \code{Shell}
+	(vykonat řádek a vypsat výsledek). Jeho \code{impl Shell} v \code{command/load.rs} leží mimo
+	modul \code{shell}, takže tyto položky musí být viditelné v rámci crate. Je to vědomá
+	nekonzistence ve viditelnosti výměnou za jednotnou strukturu příkazů.
+	
+	\subsection{Dlouhé názvy v \code{paths.rs}}
+	
+	Funkce v \code{paths.rs} jsou velmi specifické a mají dlouhé ale dobře čitelné názvy
+	(\code{get\_parent\_dir\_and\_name\_from\_path}, \code{get\_dir\_cluster\_from\_path},
+	\code{get\_node\_from\_path}, \dots). Každá odpovídá jednomu způsobu zpracování poslední části
+	cesty.
+	
+	\subsection{Další chytáky}
+	
+	\begin{itemize}
+		\item \code{get\_node\_from\_path} vrací \code{Option}: \code{None} znamená kořen, který
+		nemá rodiče ani položku se jménem. Adresář se hledá přes cluster (\code{dir\_of}), ne podle
+		jména z cesty, protože cesta může končit \code{.} nebo \code{..} a pak skutečné jméno
+		neobsahuje.
+		\item \code{read\_file} odmítne soubor, jehož řetězec neodpovídá velikosti (jinak by vrátil
+		nesmyslná data). \code{info} tuto kontrolu nedělá a nesoulad jen vypíše jako
+		\code{MISMATCH}, aby šlo poškození po \code{bug} ukázat.
+		\item V \code{move\_entry} jsou při přejmenování ve stejném adresáři \code{parent} a
+		\code{target} dvě kopie téhož clusteru. Použije se jen \code{replace} na jedné z nich
+		(funguje i v plném adresáři). Zápis přes obě kopie by jednu změnu přepsal druhou.
+		\item Smyčky, které stoupají přes \code{..} (\code{is\_dir\_inside},
+		\code{get\_path\_from\_cluster}) a prochází řetězec (\code{get\_chain}), mají strop
+		\code{cluster\_count} kroků. V poškozeném FS by jinak cyklus znamenal nekonečnou smyčku.
+	\end{itemize}
+	
+	% =====================================================================
+	\chapter{Největší problémy}
+	
+	\paragraph{Zabránění \code{load} uvnitř \code{load}.} Skript, který načítá sám sebe, by běžel
+	donekonečna. \code{Shell} má příznak \code{loading}, který se nastaví po dobu běhu skriptu.
+	Vnořený \code{load} pak skončí chybou \code{nested load}.
+	
+	\paragraph{Ukládání změn FAT (RAM a disk).} FAT je celá v paměti kvůli rychlému hledání
+	volných clusterů a procházení řetězců. Každá změna se ale hned zapíše i na disk
+	(write-through), aby soubor s FS nikdy nezaostal za stavem v paměti. Zapisuje se jen změněný
+	úsek tabulky, ne celá FAT.
+	
+	\paragraph{Překlad cesty na cluster.} Najít pro \code{/docs/images} cluster adresáře znamená
+	projít části cesty od kořene nebo aktuálního adresáře, řešit \code{.} a \code{..} a poslední část
+	nechat na volajícím (viz \nameref{sec:walk}). Hlavní potíž byla oddělit mezilehlé části (musí
+	být adresáře) od poslední části (pravidla určuje příkaz).
+	
+	\paragraph{Cesta ke clusteru (\code{pwd}).} Adresář nezná své jméno, to je uložené v rodiči.
+	Cesta se proto skládá odspodu: přes \code{..} se přejde do rodiče, v něm se najde položka, která
+	ukazuje na výchozí cluster, a tak dál až ke kořeni. Jména se sbírají od nejhlubšího a na konci se
+	otočí.
+	
+	\paragraph{Efektivní zápis souboru.} Clustery souboru se seskupí do souvislých úseků (extentů) a
+	každý úsek se zapíše nebo přečte jedním voláním. Soubor v clusterech \code{[4, 5, 9]} se tak
+	zapíše dvěma zápisy místo tří. Drobnost: změny FAT se ukládají jako jeden úsek od nejmenšího po
+	největší dotčený cluster. Když má soubor jeden cluster na začátku a druhý na konci disku,
+	přepíše se celá FAT.
+	
+	\paragraph{Přesun adresáře.} Při \code{mv} adresáře nestačí přesunout položku. Musí se přepsat
+	jeho \code{..} na nového rodiče (jinak by \code{cd ..} a \code{pwd} vedly do starého
+	umístění), zakázat přesun do vlastního podstromu (vznikla by smyčka odpojená od kořene) a
+	všechny kontroly provést dřív, než se cokoliv zapíše.
+	
+\end{document}
