@@ -143,8 +143,8 @@ fn run_fs_command(fs: &mut FileSystem, command: Command) -> Result<Output, Comma
         Command::Mv { src, dst } => fs.do_mv(&src, &dst),
         Command::Rm { path } => fs.do_rm(&path),
         Command::Info { path } => fs.do_info(&path),
-        /*Command::Check => fs.check().map(Output::Lines),
-        Command::Bug { path, kind } => fs.bug(&path, kind).map(|done| Output::Lines(vec![format!("OK ({done})")])),*/
+        Command::Check => fs.do_check(),
+        Command::Bug { path, kind } => fs.do_bug(&path, kind),
         // Shell::execute should run these before
         Command::Load { .. } | Command::Format { .. } | Command::Exit => {
             Err(AlreadyHandled(String::from("Internal fatal error, attempt to execute command twice.")))

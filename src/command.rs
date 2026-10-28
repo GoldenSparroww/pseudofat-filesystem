@@ -1,12 +1,15 @@
 use std::fmt;
 
-use crate::filesystem::FsError;
+use crate::filesystem::{BugKind, FsError};
 
+pub mod bug;
 pub mod cat;
 pub mod cd;
+pub mod check;
 pub mod cp;
 pub mod format;
 pub mod incp;
+pub mod info;
 pub mod ls;
 pub mod mkdir;
 pub mod mv;
@@ -14,7 +17,6 @@ pub mod outcp;
 pub mod pwd;
 pub mod rm;
 pub mod rmdir;
-pub mod info;
 
 // ===== Command definitions ======
 
@@ -36,7 +38,7 @@ pub enum Command {
     Format { size_raw: String },
     Exit,
     Check,
-    //Bug { path: String, kind: Option<BugKind> },
+    Bug { path: String, kind: Option<BugKind> },
 }
 
 /// Syntax of all commands
@@ -57,7 +59,7 @@ const USAGE: &[(&str, &str)] = &[
     ("format", "format <size>MB"),
     ("exit", "exit"),
     ("check", "check"),
-    ("bug", "bug <s1> [size|cycle|invalid|free]"),
+    ("bug", "bug <s1> [size|cycle|invalid]"),
 ];
 
 pub enum ParseError {
@@ -100,13 +102,11 @@ impl Command {
             ["format", size_raw] => Command::Format { size_raw: size_raw.to_string() },
             ["exit"] => Command::Exit,
             ["check"] => Command::Check,
-            /*
             ["bug", path] => Command::Bug { path: path.to_string(), kind: None },
             ["bug", path, kind] => Command::Bug {
                 path: path.to_string(),
-                // Neznámý druh je špatný parametr – hláška ukáže povolené druhy
                 kind: Some(BugKind::parse(kind).ok_or_else(|| unknown_or_wrong_arguments("bug"))?),
-            },*/
+            },
             [name, ..] => return Err(unknown_or_wrong_arguments(name)),
         };
 

@@ -1,5 +1,6 @@
 //! Filesystem pseudoFAT
 
+mod consistency;
 mod dir;
 mod disk;
 mod fat;
@@ -17,6 +18,7 @@ use crate::filesystem::fat::{FAT, FATPtrEntry};
 use crate::filesystem::superblock::Superblock;
 
 // Reexport what commands might need (ls)
+pub(crate) use consistency::BugKind;
 pub(crate) use dir::{DirEntry, DirEntryKind};
 
 #[derive(Debug)]
