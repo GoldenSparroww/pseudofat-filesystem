@@ -31,6 +31,8 @@ impl FileSystem {
 
 /// Random enough for picking a kind, no need for the `rand` crate
 fn random_index(len: usize) -> usize {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |time| time.subsec_nanos());
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |time| time.subsec_nanos());
     nanos as usize % len
 }

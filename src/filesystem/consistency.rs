@@ -1,5 +1,5 @@
 //! Consistency helpers
-//! 
+//!
 //! Used by `bug` and `check` commands
 
 use std::fmt;
@@ -58,7 +58,13 @@ impl FileSystem {
     }
 
     /// Recursive walk through directory tree
-    fn check_dir(&self, cluster: u32, path: &str, visited: &mut [bool], problems: &mut Vec<String>) -> Result<(), FsError> {
+    fn check_dir(
+        &self,
+        cluster: u32,
+        path: &str,
+        visited: &mut [bool],
+        problems: &mut Vec<String>,
+    ) -> Result<(), FsError> {
         let shown = if path.is_empty() { "/" } else { path };
 
         match visited.get_mut(cluster as usize) {
@@ -109,10 +115,7 @@ impl FileSystem {
 
         let needed = (size as usize).div_ceil(self.superblock.cluster_size as usize);
         if clusters.len() != needed {
-            problems.push(format!(
-                "{path}: size {size} B needs {needed} clusters, chain has {}",
-                clusters.len()
-            ));
+            problems.push(format!("{path}: size {size} B needs {needed} clusters, chain has {}", clusters.len()));
         }
     }
 }
@@ -124,7 +127,9 @@ impl FileSystem {
     /// `size` always works; `cycle` and `invalid` need at least one cluster and an intact chain
     pub fn get_bug_kinds(&self, entry: &DirEntry) -> Vec<BugKind> {
         match self.fat.get_chain(entry.start) {
-            Ok(clusters) if !clusters.is_empty() => vec![BugKind::SizeDiffer, BugKind::CycleFAT, BugKind::InvalidClusterNum],
+            Ok(clusters) if !clusters.is_empty() => {
+                vec![BugKind::SizeDiffer, BugKind::CycleFAT, BugKind::InvalidClusterNum]
+            }
             _ => vec![BugKind::SizeDiffer], // when start is eof AND get_chain retunered error (something is already broken)
         }
     }

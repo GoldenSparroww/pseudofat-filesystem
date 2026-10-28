@@ -265,7 +265,6 @@ fn rmdir_frees_cluster() {
     assert_eq!(banner(&fs), before);
 }
 
-
 // ===== incp, cat ======
 
 #[test]
@@ -343,7 +342,10 @@ fn cp_errors() {
 #[test]
 fn mv_rename_and_move() {
     let src = host_file("mv_ok.txt", b"data");
-    let r = fresh("mv_ok", &format!("incp {src} a.txt\nmkdir a1\nmv a.txt b.txt\nmv b.txt a1/c.txt\nls\nls a1\ncat a1/c.txt\n"));
+    let r = fresh(
+        "mv_ok",
+        &format!("incp {src} a.txt\nmkdir a1\nmv a.txt b.txt\nmv b.txt a1/c.txt\nls\nls a1\ncat a1/c.txt\n"),
+    );
     assert_eq!(r.stdout, ["OK", "OK", "OK", "OK", "DIR: a1", "FILE: c.txt", "data"]);
 }
 
@@ -357,7 +359,10 @@ fn mv_dir_updates_parent() {
 #[test]
 fn mv_errors() {
     let src = host_file("mv_errors.txt", b"x");
-    let r = fresh("mv_errors", &format!("incp {src} a\nmkdir a1\nmkdir a1/b1\nmv nic b\nmv a x/b\nmv a a1\nmv a1 a1/b1/a1\n"));
+    let r = fresh(
+        "mv_errors",
+        &format!("incp {src} a\nmkdir a1\nmkdir a1/b1\nmv nic b\nmv a x/b\nmv a a1\nmv a1 a1/b1/a1\n"),
+    );
     assert_eq!(r.stdout, ["OK", "OK", "OK"]);
     assert!(r.stderr.contains("FILE NOT FOUND"), "{}", r.stderr);
     assert!(r.stderr.contains("PATH NOT FOUND"), "{}", r.stderr);
@@ -445,9 +450,14 @@ fn bug_kinds_detected_by_check() {
     let src = host_file("bug_kinds.txt", &big_content(3000));
     let r = fresh(
         "bug_kinds",
-        &format!("incp {src} s.txt\nincp {src} c.txt\nincp {src} i.txt\nbug s.txt size\nbug c.txt cycle\nbug i.txt invalid\ncheck\n"),
+        &format!(
+            "incp {src} s.txt\nincp {src} c.txt\nincp {src} i.txt\nbug s.txt size\nbug c.txt cycle\nbug i.txt invalid\ncheck\n"
+        ),
     );
-    assert_eq!(&r.stdout[3..6], ["Successfully damaged (size)", "Successfully damaged (cycle)", "Successfully damaged (invalid)"]);
+    assert_eq!(
+        &r.stdout[3..6],
+        ["Successfully damaged (size)", "Successfully damaged (cycle)", "Successfully damaged (invalid)"]
+    );
     assert_eq!(r.stdout.len(), 9, "{:?}", r.stdout);
     assert!(r.stdout[6].starts_with("/s.txt: size"), "{:?}", r.stdout);
     assert!(r.stdout[7].starts_with("/c.txt:") && r.stdout[7].contains("cycle"), "{:?}", r.stdout);
@@ -466,7 +476,10 @@ fn bug_random_is_detected() {
 #[test]
 fn bug_errors() {
     let empty = host_file("bug_empty.txt", b"");
-    let r = fresh("bug_errors", &format!("mkdir a1\nincp {empty} e.txt\nbug nic\nbug a1\nbug e.txt cycle\nbug e.txt free\n"));
+    let r = fresh(
+        "bug_errors",
+        &format!("mkdir a1\nincp {empty} e.txt\nbug nic\nbug a1\nbug e.txt cycle\nbug e.txt free\n"),
+    );
     assert_eq!(r.stdout, ["OK", "OK", "WRONG ARGUMENTS (usage: bug <s1> [size|cycle|invalid])"]);
     assert_eq!(r.stderr.matches("FILE NOT FOUND").count(), 2, "{}", r.stderr);
     // An empty file has no clusters, so only `size` can be applied

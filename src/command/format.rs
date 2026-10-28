@@ -1,5 +1,5 @@
 //! Command `format`
-//! 
+//!
 //! Only command which is not inside `impl Filesystem`, because it does not depend on it.
 
 use std::path::PathBuf;
