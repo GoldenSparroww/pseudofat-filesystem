@@ -1,4 +1,4 @@
-# pseudoFAT
+# PseudoFAT
 
 A simplified FAT-based filesystem, written in Rust as a semester project for KIV/ZOS. The whole
 filesystem is stored in a single file on the host disk and its content persists between runs.
@@ -29,14 +29,14 @@ The script for `load` has to be inside our filesystem, copy it there with `incp`
 
 ## Makefile
 
-| target | what it does |
-|---|---|
-| `make build` | `cargo build --release` and copy into `dist/` |
-| `make run` | runs `dist/pseudofat ./dist/myfs.dat` |
-| `make test` | `cargo test` (integration tests in `tests/`) |
-| `make fmt` | `cargo fmt` |
-| `make clippy` | `cargo clippy --all-targets` |
-| `make clean` | removes `target/` and `dist/` |
+| target        | what it does                                  |
+| ------------- | --------------------------------------------- |
+| `make build`  | `cargo build --release` and copy into `dist/` |
+| `make run`    | runs `dist/pseudofat ./dist/myfs.dat`         |
+| `make test`   | `cargo test` (integration tests in `tests/`)  |
+| `make fmt`    | `cargo fmt`                                   |
+| `make clippy` | `cargo clippy --all-targets`                  |
+| `make clean`  | removes `target/` and `dist/`                 |
 
 ## Documentation
 
